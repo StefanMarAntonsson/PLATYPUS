@@ -33,6 +33,7 @@ jobs:
       - run: vp pm audit
       - run: vp check
       - run: vp test
+      - run: vp build
       - run: cargo fmt --check --manifest-path src-tauri/Cargo.toml
       - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
       - run: vp exec tauri build --no-bundle
