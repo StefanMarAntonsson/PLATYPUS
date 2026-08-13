@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "id": "example-graphql-catalog",
+  "name": "Example GraphQL Catalog",
+  "description": "Representative GraphQL catalog using a bearer token and cursor pagination.",
+  "baseUrl": "https://graphql.catalog.example",
+  "allowedHosts": ["graphql.catalog.example"],
+  "authentication": { "type": "bearer", "secretName": "accessToken" },
+  "operations": {
+    "search": {
+      "request": {
+        "protocol": "graphql",
+        "method": "POST",
+        "path": "/graphql",
+        "query": "query Search($query: String!, $after: String) { search(query: $query, after: $after) { nodes { id type title synopsis startDate poster { url } } pageInfo { endCursor } } }",
+        "variables": { "query": "${input.query}", "after": "${page.cursor}" },
+        "headers": { "X-Client": "PLATYPUS" }
+      },
+      "response": {
+        "resultsPath": "$.data.search.nodes",
+        "mapping": {
+          "providerId": "$.id",
+          "kind": "$.type",
+          "title": "$.title",
+          "overview": "$.synopsis",
+          "startDate": "$.startDate",
+          "artwork.poster": "$.poster.url"
+        }
+      },
+      "pagination": {
+        "type": "cursor",
+        "parameter": "after",
+        "nextCursorPath": "$.data.search.pageInfo.endCursor"
+      }
+    }
+  },
+  "cache": { "defaultTtlSeconds": 900 }
+}

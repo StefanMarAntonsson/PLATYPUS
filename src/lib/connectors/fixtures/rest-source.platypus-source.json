@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "id": "example-rest-catalog",
+  "name": "Example REST Catalog",
+  "description": "Representative paginated REST catalog using a header API key.",
+  "baseUrl": "https://api.catalog.example",
+  "allowedHosts": ["api.catalog.example"],
+  "assetHosts": ["images.catalog.example"],
+  "authentication": {
+    "type": "apiKey",
+    "secretName": "apiKey",
+    "location": "header",
+    "parameter": "X-API-Key"
+  },
+  "operations": {
+    "search": {
+      "request": {
+        "protocol": "rest",
+        "method": "GET",
+        "path": "/v1/search",
+        "query": { "q": "${input.query}", "kind": "${input.mediaKind}", "page": "${page.number}" },
+        "headers": { "Accept-Language": "${connection.language}" }
+      },
+      "response": {
+        "resultsPath": "$.results",
+        "mapping": {
+          "providerId": "$.id",
+          "kind": "$.media_type",
+          "title": "$.name",
+          "overview": "$.summary",
+          "releaseDate": "$.released_on",
+          "artwork.poster": "$.images.poster"
+        },
+        "schema": {
+          "type": "object",
+          "required": ["results"],
+          "properties": { "results": { "type": "array" } }
+        }
+      },
+      "pagination": {
+        "type": "page",
+        "parameter": "page",
+        "start": 1,
+        "totalPagesPath": "$.pages"
+      },
+      "timeoutMs": 10000,
+      "retry": { "maxAttempts": 3, "backoffMs": 500, "retryStatuses": [429, 502, 503, 504] }
+    },
+    "details": {
+      "request": { "protocol": "rest", "method": "GET", "path": "/v1/titles/${input.providerId}" },
+      "response": {
+        "mapping": {
+          "providerId": "$.id",
+          "kind": "$.media_type",
+          "title": "$.name",
+          "genres": "$.genres"
+        }
+      }
+    }
+  },
+  "attribution": {
+    "name": "Example Catalog",
+    "url": "https://catalog.example",
+    "license": "Example data terms"
+  },
+  "cache": { "defaultTtlSeconds": 3600 }
+}

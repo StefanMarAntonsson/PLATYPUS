@@ -1,0 +1,95 @@
+{
+  "version": 2,
+  "exportedAt": "2026-08-08T12:00:00.000Z",
+  "media": [
+    {
+      "id": 101,
+      "titleRomaji": "Fixture Series",
+      "titleEnglish": "Fixture Series",
+      "titleNative": null,
+      "status": "FINISHED",
+      "format": "TV",
+      "totalEpisodes": 2,
+      "airedEpisodes": 2,
+      "nextAiringEpisode": null,
+      "nextAiringAt": null,
+      "coverImageLarge": null,
+      "coverImageMedium": null,
+      "bannerImage": null,
+      "season": "SUMMER",
+      "seasonYear": 2026,
+      "genres": ["Drama"],
+      "description": null,
+      "siteUrl": "https://anilist.co/anime/101",
+      "externalLinks": [],
+      "syncedAt": 1786190400000,
+      "malId": 202
+    }
+  ],
+  "episodes": [
+    {
+      "id": 10100001,
+      "mediaId": 101,
+      "number": 1,
+      "title": "One",
+      "airingAt": 1786000000000,
+      "aired": true,
+      "watched": true,
+      "watchedAt": 1786100000000,
+      "skipped": false,
+      "isFiller": false,
+      "isRecap": false,
+      "thumbnail": null
+    },
+    {
+      "id": 10100002,
+      "mediaId": 101,
+      "number": 2,
+      "title": "Two",
+      "airingAt": 1786086400000,
+      "aired": true,
+      "watched": false,
+      "watchedAt": null,
+      "skipped": true,
+      "isFiller": false,
+      "isRecap": false,
+      "thumbnail": null
+    }
+  ],
+  "library": [
+    {
+      "id": 1,
+      "mediaId": 101,
+      "status": "COMPLETED",
+      "score": 9,
+      "notes": "keep me",
+      "startedAt": 1786000000000,
+      "completedAt": 1786100000000,
+      "addedAt": 1785900000000,
+      "updatedAt": 1786100000000
+    }
+  ],
+  "collections": [
+    {
+      "id": 1,
+      "name": "Favorites",
+      "originalName": null,
+      "coverMediaId": 101,
+      "notes": null,
+      "createdAt": 1785900000000
+    }
+  ],
+  "collectionEntries": [{ "collectionId": 1, "mediaId": 101, "order": 1 }],
+  "series": [
+    {
+      "id": 2,
+      "name": "Franchise",
+      "originalName": null,
+      "coverMediaId": 101,
+      "notes": null,
+      "createdAt": 1785900000000
+    }
+  ],
+  "seriesEntries": [{ "seriesId": 2, "mediaId": 101, "order": 1 }],
+  "settings": { "accentColor": "#123456", "titleLanguage": "romaji" }
+}

@@ -1,0 +1,217 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://platypus.local/schemas/source-template-v1.json",
+  "title": "PLATYPUS source template version 1",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "id",
+    "name",
+    "baseUrl",
+    "allowedHosts",
+    "authentication",
+    "operations"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "maxLength": 80 },
+    "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+    "description": { "type": "string", "maxLength": 500 },
+    "baseUrl": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^(?:https://|http://(?:localhost|127\\.0\\.0\\.1)(?::[0-9]+)?(?:/|$))"
+    },
+    "allowedHosts": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/host" }
+    },
+    "assetHosts": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/host" } },
+    "attribution": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "url": { "type": "string", "format": "uri" },
+        "license": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "authentication": { "$ref": "#/$defs/authentication" },
+    "operations": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "enum": [
+          "search",
+          "details",
+          "seasons",
+          "episodes",
+          "external_ids",
+          "images",
+          "release_dates",
+          "availability",
+          "history"
+        ]
+      },
+      "additionalProperties": { "$ref": "#/$defs/operation" }
+    },
+    "cache": {
+      "type": "object",
+      "required": ["defaultTtlSeconds"],
+      "properties": {
+        "defaultTtlSeconds": { "type": "integer", "minimum": 0, "maximum": 2592000 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "patternProperties": { "^x-[a-z0-9-]+$": true },
+  "additionalProperties": false,
+  "$defs": {
+    "host": {
+      "type": "string",
+      "pattern": "^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\\.)*[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$"
+    },
+    "templateString": { "type": "string", "maxLength": 10000 },
+    "stringMap": { "type": "object", "additionalProperties": { "$ref": "#/$defs/templateString" } },
+    "authentication": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type"],
+          "properties": { "type": { "const": "none" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "secretName", "location", "parameter"],
+          "properties": {
+            "type": { "const": "apiKey" },
+            "secretName": { "$ref": "#/$defs/identifier" },
+            "location": { "enum": ["header", "query"] },
+            "parameter": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "secretName"],
+          "properties": {
+            "type": { "const": "bearer" },
+            "secretName": { "$ref": "#/$defs/identifier" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "usernameSecretName", "passwordSecretName"],
+          "properties": {
+            "type": { "const": "basic" },
+            "usernameSecretName": { "$ref": "#/$defs/identifier" },
+            "passwordSecretName": { "$ref": "#/$defs/identifier" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "identifier": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*$" },
+    "restRequest": {
+      "type": "object",
+      "required": ["protocol", "method", "path"],
+      "properties": {
+        "protocol": { "const": "rest" },
+        "method": { "enum": ["GET", "POST"] },
+        "path": { "$ref": "#/$defs/path" },
+        "query": { "$ref": "#/$defs/stringMap" },
+        "headers": { "$ref": "#/$defs/stringMap" },
+        "body": {}
+      },
+      "additionalProperties": false
+    },
+    "graphqlRequest": {
+      "type": "object",
+      "required": ["protocol", "method", "path", "query"],
+      "properties": {
+        "protocol": { "const": "graphql" },
+        "method": { "const": "POST" },
+        "path": { "$ref": "#/$defs/path" },
+        "query": { "$ref": "#/$defs/templateString" },
+        "variables": { "type": "object" },
+        "headers": { "$ref": "#/$defs/stringMap" }
+      },
+      "additionalProperties": false
+    },
+    "path": { "type": "string", "pattern": "^/", "maxLength": 2000 },
+    "response": {
+      "type": "object",
+      "required": ["mapping"],
+      "properties": {
+        "resultsPath": { "$ref": "#/$defs/expression" },
+        "mapping": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "$ref": "#/$defs/expression" }
+        },
+        "schema": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+    "expression": { "type": "string", "pattern": "^\\$", "maxLength": 500 },
+    "pagination": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "parameter"],
+          "properties": {
+            "type": { "const": "page" },
+            "parameter": { "type": "string", "minLength": 1 },
+            "start": { "type": "integer", "minimum": 0 },
+            "totalPagesPath": { "$ref": "#/$defs/expression" },
+            "hasNextPath": { "$ref": "#/$defs/expression" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "parameter", "nextCursorPath"],
+          "properties": {
+            "type": { "const": "cursor" },
+            "parameter": { "type": "string", "minLength": 1 },
+            "nextCursorPath": { "$ref": "#/$defs/expression" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "retry": {
+      "type": "object",
+      "required": ["maxAttempts", "backoffMs"],
+      "properties": {
+        "maxAttempts": { "type": "integer", "minimum": 1, "maximum": 5 },
+        "backoffMs": { "type": "integer", "minimum": 0, "maximum": 60000 },
+        "retryStatuses": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "integer", "minimum": 100, "maximum": 599 }
+        }
+      },
+      "additionalProperties": false
+    },
+    "operation": {
+      "type": "object",
+      "required": ["request", "response"],
+      "properties": {
+        "request": {
+          "oneOf": [{ "$ref": "#/$defs/restRequest" }, { "$ref": "#/$defs/graphqlRequest" }]
+        },
+        "response": { "$ref": "#/$defs/response" },
+        "pagination": { "$ref": "#/$defs/pagination" },
+        "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 120000 },
+        "retry": { "$ref": "#/$defs/retry" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

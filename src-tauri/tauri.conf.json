@@ -1,0 +1,42 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "PLATYPUS",
+  "version": "0.0.1",
+  "identifier": "io.github.stefanmarantonsson.platypus",
+  "build": {
+    "beforeDevCommand": "vp dev --host 127.0.0.1 --port 1420",
+    "beforeBuildCommand": "vp build",
+    "devUrl": "http://127.0.0.1:1420",
+    "frontendDist": "../build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "PLATYPUS",
+        "decorations": false,
+        "width": 1280,
+        "height": 820,
+        "minWidth": 900,
+        "minHeight": 600
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' https: http://localhost:* http://127.0.0.1:*; img-src 'self' https: data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'none'; form-action 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["appimage", "deb"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/64x64.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png"
+    ],
+    "category": "Utility",
+    "shortDescription": "Personal media tracker",
+    "longDescription": "A local-first personal tracker for anime, movies, and television."
+  }
+}
