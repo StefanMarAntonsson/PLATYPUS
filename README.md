@@ -11,6 +11,9 @@ Download the latest Linux package from [GitHub Releases](https://github.com/Stef
 
 Each release includes a `SHA256SUMS` file for verifying downloads.
 
+Maintainers can publish a release by following the
+[release guide](docs/releasing.md).
+
 ## Run the desktop app
 
 Install the [Arch Linux prerequisites](docs/desktop-development.md), then use the project toolchain:
