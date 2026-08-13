@@ -3,7 +3,8 @@
   import favicon from '$lib/assets/favicon.svg';
   import { page } from '$app/state';
   import { base } from '$app/paths';
-  import { getCurrentWindow } from '@tauri-apps/api/window';
+  import { onMount } from 'svelte';
+  import type { Window as TauriWindow } from '@tauri-apps/api/window';
   import { isTauri } from '@tauri-apps/api/core';
   import { fs, initFile } from '$lib/store.svelte.js';
   import NotificationOverlay from '$lib/components/NotificationOverlay.svelte';
@@ -28,7 +29,15 @@
     { href: '/settings',    label: 'Settings'    },
   ];
 
-  const desktopWindow = isTauri() ? getCurrentWindow() : null;
+  let desktopWindow = $state<TauriWindow | null>(null);
+
+  onMount(() => {
+    if (!isTauri()) return;
+    // Let the window module finish initializing before its constructor is used.
+    void import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
+      desktopWindow = getCurrentWindow();
+    });
+  });
 
   const current = $derived(page.route.id);
   const navIconPaths: Record<string, string[]> = {

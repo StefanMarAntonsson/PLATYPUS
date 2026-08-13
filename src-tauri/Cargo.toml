@@ -1,6 +1,6 @@
 [package]
 name = "platypus"
-version = "0.0.1"
+version = "0.0.2"
 description = "A personal media tracker"
 authors = ["Stefan Mar Antonsson"]
 license = "MIT"
@@ -10,6 +10,10 @@ edition = "2021"
 [lib]
 name = "platypus_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

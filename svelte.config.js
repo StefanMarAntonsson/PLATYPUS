@@ -8,6 +8,11 @@ const config = {
   },
   kit: {
     adapter: adapter({ fallback: "index.html" }),
+    output: {
+      // WebKitGTK can mount split route chunks before their top-level template
+      // factories have finished initializing when served over Tauri's protocol.
+      bundleStrategy: "single",
+    },
   },
 };
 
