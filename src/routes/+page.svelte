@@ -5,7 +5,7 @@
   import type { CollectionFilter, SortOption, Media, LibraryEntry } from '$lib/types.js';
   import { appData, fs, mediaWatchEvents, removeFromLibrary, setMovieWatched, updateSettings } from '$lib/store.svelte.js';
   import { getTitle, formatLabel, seasonLabel, progressPercent, findStreamingLink, streamingIconUrl, streamingSiteFromUrl, formatAirDate, formatCountdown, isOnBreak, timeAgo } from '$lib/utils.js';
-  import { syncMedia, syncAiringLibrary } from '$lib/api/sync.js';
+  import { canSyncMedia, syncMedia, syncAiringLibrary } from '$lib/api/sync.js';
   import EpisodeTable from '$lib/components/EpisodeTable.svelte';
   import ProgressBar from '$lib/components/ProgressBar.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
@@ -816,11 +816,13 @@
             class="text-xs px-3 py-1.5 rounded bg-surface-2 border border-border hover:border-zinc-500 text-zinc-300 transition-colors"
             onclick={() => collectTarget = m.id}
           >+ Collection</button>
-          <button
-            class="text-xs px-3 py-1.5 rounded bg-surface-2 border border-border hover:border-zinc-500 text-zinc-300 transition-colors flex items-center gap-1.5"
-            onclick={() => handleSync(m.id)}
-            disabled={syncing !== null}
-          ><span class="{syncing === m.id ? 'animate-spin' : ''}">↻</span> Sync</button>
+          {#if canSyncMedia(m)}
+            <button
+              class="text-xs px-3 py-1.5 rounded bg-surface-2 border border-border hover:border-zinc-500 text-zinc-300 transition-colors flex items-center gap-1.5"
+              onclick={() => handleSync(m.id)}
+              disabled={syncing !== null}
+            ><span class="{syncing === m.id ? 'animate-spin' : ''}">↻</span> Sync</button>
+          {/if}
           {#if expandedIsMovie}
             <button
               class="text-xs px-3 py-1.5 rounded border transition-colors {expandedMovieWatched ? 'border-accent/40 bg-accent/10 text-accent' : 'border-border bg-surface-2 text-zinc-300 hover:border-zinc-500'}"

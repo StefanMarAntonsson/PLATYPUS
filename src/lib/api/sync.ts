@@ -2,7 +2,11 @@ import type { Media, Episode } from "$lib/types.js";
 import { sleep } from "./http.js";
 import { notify } from "$lib/notifications.svelte.js";
 import { appData, getMedia, upsertMedia, upsertEpisodes } from "$lib/store.svelte.js";
-import { fetchSourceMediaUpdate } from "$lib/sources.svelte.js";
+import {
+  canRefreshFromSource,
+  fetchSourceMediaUpdate,
+  refreshConnectionForTemplate,
+} from "$lib/sources.svelte.js";
 
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : "Unknown error");
 
@@ -38,6 +42,26 @@ function sourceText(value: unknown): string | null {
 function sourceId(value: unknown): string | null {
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
   return sourceText(value);
+}
+
+function legacyAniListProviderId(media: Media): string | undefined {
+  if (media.id <= 0 || !media.siteUrl) return undefined;
+  try {
+    const url = new URL(media.siteUrl);
+    const [kind, providerId] = url.pathname.split("/").filter(Boolean);
+    if (
+      url.protocol === "https:" &&
+      url.hostname === "anilist.co" &&
+      kind === "anime" &&
+      /^\d+$/.test(providerId ?? "") &&
+      Number(providerId) === media.id
+    ) {
+      return providerId;
+    }
+  } catch {
+    // Imported legacy URLs are untrusted data. An invalid URL is simply not a sync identity.
+  }
+  return undefined;
 }
 
 function plainText(value: string | undefined): string | null {
@@ -82,9 +106,11 @@ async function _syncConfiguredSourceMedia(
       );
       Object.assign(media, {
         kind: details.kind,
-        titleRomaji: details.title,
-        titleEnglish: details.title,
-        titleNative: details.originalTitle ?? media.titleNative,
+        titleRomaji:
+          sourceText(details.titleRomaji) ?? sourceText(details.title) ?? media.titleRomaji,
+        titleEnglish: sourceText(details.titleEnglish) ?? media.titleEnglish,
+        titleNative:
+          sourceText(details.titleNative) ?? sourceText(details.originalTitle) ?? media.titleNative,
         status: details.lifecycle
           ? mediaStatusFromLifecycle(details.lifecycle, media.status)
           : media.status,
@@ -137,8 +163,9 @@ async function _syncConfiguredSourceMedia(
 
     if (update.episodes) {
       upsertEpisodes(episodes);
-      media.totalEpisodes = episodes.length;
-      media.airedEpisodes = episodes.filter((episode) => episode.aired).length;
+      const storedEpisodes = appData.episodes.filter((episode) => episode.mediaId === media.id);
+      media.totalEpisodes = Math.max(media.totalEpisodes ?? 0, storedEpisodes.length);
+      media.airedEpisodes = storedEpisodes.filter((episode) => episode.aired).length;
       const nextAiring = episodes
         .filter((episode) => episode.airingAt !== null && episode.airingAt > now)
         .sort((a, b) => (a.airingAt as number) - (b.airingAt as number))[0];
@@ -156,10 +183,14 @@ async function _syncConfiguredSourceMedia(
   }
 }
 
-function syncTarget(mediaId: number): Media["syncSource"] | undefined {
+function syncTarget(
+  mediaId: number,
+): Extract<Media["syncSource"], { kind: "connection" }> | undefined {
   const media = getMedia(mediaId);
-  if (media?.syncSource) return media.syncSource;
-  const sourceLink = media?.providerLinks?.[0];
+  if (media?.syncSource?.kind === "connection") return media.syncSource;
+  const sourceLink =
+    media?.providerLinks?.find((link) => canRefreshFromSource(link.connectionId)) ??
+    media?.providerLinks?.[0];
   if (sourceLink) {
     return {
       kind: "connection",
@@ -167,7 +198,30 @@ function syncTarget(mediaId: number): Media["syncSource"] | undefined {
       providerId: sourceLink.providerId,
     };
   }
+  const legacyAniListId =
+    media?.syncSource?.kind === "anilist"
+      ? media.syncSource.providerId
+      : media
+        ? legacyAniListProviderId(media)
+        : undefined;
+  if (legacyAniListId) {
+    const connection = refreshConnectionForTemplate("anilist");
+    if (connection) {
+      return {
+        kind: "connection",
+        connectionId: connection.id,
+        providerId: legacyAniListId,
+      };
+    }
+  }
   return undefined;
+}
+
+/** Whether this item has a provider identity that the connector engine can refresh. */
+export function canSyncMedia(media: Media | undefined): boolean {
+  if (!media) return false;
+  const target = syncTarget(media.id);
+  return !!target && canRefreshFromSource(target.connectionId);
 }
 
 export function syncMedia(mediaId: number): Promise<SyncResult> {
@@ -193,7 +247,7 @@ const BULK_THROTTLE_MS = 700;
 export async function syncAllLibrary(): Promise<SyncResult> {
   const ids = appData.library
     .map((entry) => entry.mediaId)
-    .filter((mediaId) => syncTarget(mediaId) !== undefined);
+    .filter((mediaId) => canSyncMedia(getMedia(mediaId)));
   let errors = 0;
 
   for (let i = 0; i < ids.length; i++) {
@@ -228,7 +282,7 @@ export async function syncAiringLibrary(
         (syncFilters.upcoming && m.status === "NOT_YET_RELEASED") ||
         (syncFilters.hiatus && m.status === "HIATUS"),
     )
-    .filter((media) => syncTarget(media.id) !== undefined)
+    .filter((media) => canSyncMedia(media))
     .map((m) => m.id);
 
   let errors = 0;

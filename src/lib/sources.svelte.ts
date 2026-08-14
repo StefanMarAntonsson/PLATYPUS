@@ -30,6 +30,48 @@ export const sourcesState = $state({
 let initialization: Promise<void> | undefined;
 const connectorEngine = new ConnectorEngine();
 
+function withAniListEnglishTitles(template: SourceTemplateV1): SourceTemplateV1 {
+  if (template.id !== "anilist") return template;
+  let changed = false;
+  const operations = { ...template.operations };
+
+  for (const name of ["search", "details"] as const) {
+    const operation = operations[name];
+    if (!operation || operation.request.protocol !== "graphql") continue;
+    const query = operation.request.query.replace(
+      /title\s*\{([^}]*)\}/,
+      (selection, fields: string) => {
+        if (/\benglish\b/.test(fields)) return selection;
+        changed = true;
+        return selection.replace("}", " english }");
+      },
+    );
+    const mapping = {
+      ...operation.response.mapping,
+      titleRomaji: operation.response.mapping.titleRomaji ?? "$.title.romaji",
+      titleEnglish: operation.response.mapping.titleEnglish ?? "$.title.english",
+      titleNative:
+        operation.response.mapping.titleNative ??
+        operation.response.mapping.originalTitle ??
+        "$.title.native",
+    };
+    if (
+      mapping.titleRomaji !== operation.response.mapping.titleRomaji ||
+      mapping.titleEnglish !== operation.response.mapping.titleEnglish ||
+      mapping.titleNative !== operation.response.mapping.titleNative
+    ) {
+      changed = true;
+    }
+    operations[name] = {
+      ...operation,
+      request: { ...operation.request, query },
+      response: { ...operation.response, mapping },
+    };
+  }
+
+  return changed ? { ...template, operations } : template;
+}
+
 /** Treat persisted source configuration as untrusted, just like imported templates. */
 export function parseConfiguredSources(value: unknown): ConfiguredSource[] {
   if (!Array.isArray(value)) return [];
@@ -51,9 +93,10 @@ export function parseConfiguredSources(value: unknown): ConfiguredSource[] {
     } catch {
       return [];
     }
+    const upgradedTemplate = withAniListEnglishTitles(checked.value);
     return [
       {
-        template: checked.value,
+        template: upgradedTemplate,
         connection: {
           ...configured,
           tracking: {
@@ -114,8 +157,9 @@ export function newConnection(template: SourceTemplateV1, name = template.name):
 export async function addSource(template: SourceTemplateV1, name?: string) {
   const checked = validateSourceTemplate(template);
   if (!checked.valid) throw new Error(checked.errors.map((issue) => issue.message).join("; "));
-  const connection = newConnection(checked.value, name);
-  sourcesState.sources = [...sourcesState.sources, { template: checked.value, connection }];
+  const configuredTemplate = withAniListEnglishTitles(checked.value);
+  const connection = newConnection(configuredTemplate, name);
+  sourcesState.sources = [...sourcesState.sources, { template: configuredTemplate, connection }];
   await persist();
   return connection;
 }
@@ -154,9 +198,10 @@ export async function importSourcesBundle(
       continue;
     }
     existing.add(key);
-    const connection = newConnection(source.template, source.connection.name);
+    const configuredTemplate = withAniListEnglishTitles(source.template);
+    const connection = newConnection(configuredTemplate, source.connection.name);
     imported.push({
-      template: source.template,
+      template: configuredTemplate,
       connection: {
         ...connection,
         baseUrl: source.connection.baseUrl,
@@ -297,6 +342,7 @@ export async function fetchSourceMediaUpdate(
   let source = sourcesState.sources.find((configured) => configured.connection.id === connectionId);
   if (!source) throw new Error("The media source connection is no longer configured");
   if (!source.connection.enabled) throw new Error(`${source.connection.name} is disabled`);
+  source = { ...source, template: withAniListEnglishTitles(source.template) };
 
   const input = { providerId };
   const details = source.template.operations.details
@@ -318,6 +364,26 @@ export async function fetchSourceMediaUpdate(
     throw new Error(`${source.connection.name} does not support details or episode sync`);
   }
   return { source, details, episodes };
+}
+
+export function canRefreshFromSource(connectionId: string): boolean {
+  const source = sourcesState.sources.find(
+    (configured) => configured.connection.id === connectionId,
+  );
+  return !!(
+    source?.connection.enabled &&
+    (source.template.operations.details || source.template.operations.episodes)
+  );
+}
+
+/** Resolve a legacy provider kind through an explicitly configured refresh-capable source. */
+export function refreshConnectionForTemplate(templateId: string): SourceConnection | undefined {
+  return sourcesState.sources.find(
+    (source) =>
+      source.template.id === templateId &&
+      source.connection.enabled &&
+      !!(source.template.operations.details || source.template.operations.episodes),
+  )?.connection;
 }
 
 export async function searchSources(

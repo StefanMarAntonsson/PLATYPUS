@@ -72,6 +72,9 @@ export interface NormalizedMedia {
   providerId: string;
   kind: MediaKind;
   title: string;
+  titleEnglish?: string;
+  titleRomaji?: string;
+  titleNative?: string;
   originalTitle?: string;
   overview?: string;
   originalLanguage?: string;

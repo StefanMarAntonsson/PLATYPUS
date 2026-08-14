@@ -7,7 +7,7 @@
     removeMediaFromSeries, getSeriesMedia,
   } from '$lib/store.svelte.js';
   import { getTitle, progressPercent } from '$lib/utils.js';
-  import { syncMedia } from '$lib/api/sync.js';
+  import { canSyncMedia, syncMedia } from '$lib/api/sync.js';
   import EpisodeTable from '$lib/components/EpisodeTable.svelte';
   import ProgressBar from '$lib/components/ProgressBar.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
@@ -55,10 +55,12 @@
       class="absolute bg-zinc-800 border border-zinc-700 rounded-lg py-1 shadow-xl min-w-[160px]"
       style="left:{contextMenu.x}px;top:{contextMenu.y}px"
     >
-      <button
-        class="w-full text-left px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-700"
-        onclick={async () => { await syncMedia(contextMenu!.mediaId); contextMenu = null; }}
-      >Force sync</button>
+      {#if canSyncMedia(appData.media.find(media => media.id === contextMenu.mediaId))}
+        <button
+          class="w-full text-left px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-700"
+          onclick={async () => { await syncMedia(contextMenu!.mediaId); contextMenu = null; }}
+        >Force sync</button>
+      {/if}
       <a
         href="{base}/anime/{contextMenu.mediaId}"
         class="block px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-700"

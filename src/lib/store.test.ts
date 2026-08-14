@@ -3,6 +3,7 @@ import fixture from "./fixtures/v2-library.json";
 import { parseV2Data } from "./legacy-data.js";
 import {
   appData,
+  attachSourceToMedia,
   autoUpdateLibraryStatus,
   cycleEpisodeState,
   createManualMedia,
@@ -89,6 +90,62 @@ describe("episode state transitions", () => {
       watched: true,
       watchedAt: 1786100000000,
     });
+  });
+
+  test("adopts provider identity without duplicating a legacy episode", () => {
+    const legacy = appData.episodes[0];
+    const incoming: typeof legacy = {
+      ...legacy,
+      id: -1,
+      title: null,
+      watched: false,
+      watchedAt: null,
+      providerLinks: [{ connectionId: "anilist", providerId: "remote-episode-1" }],
+    };
+
+    upsertEpisodes([incoming]);
+
+    const episodes = appData.episodes.filter(
+      (episode) => episode.mediaId === legacy.mediaId && episode.number === legacy.number,
+    );
+    expect(episodes).toHaveLength(1);
+    expect(episodes[0]).toMatchObject({
+      id: legacy.id,
+      title: legacy.title,
+      watched: true,
+      watchedAt: legacy.watchedAt,
+      providerLinks: [{ connectionId: "anilist", providerId: "remote-episode-1" }],
+    });
+  });
+
+  test("repairs existing duplicate episodes and keeps watch events attached", () => {
+    const legacy = appData.episodes[0];
+    const duplicate = {
+      ...legacy,
+      id: -1,
+      title: null,
+      watched: false,
+      watchedAt: null,
+      providerLinks: [{ connectionId: "anilist", providerId: "remote-episode-1" }],
+    };
+    appData.episodes.push(duplicate);
+    appData.watchEvents.push({
+      id: 999,
+      mediaId: legacy.mediaId,
+      episodeId: duplicate.id,
+      watchedAt: Date.now(),
+      progress: 1,
+      origin: "source",
+    });
+
+    upsertEpisodes([{ ...duplicate }]);
+
+    expect(
+      appData.episodes.filter(
+        (episode) => episode.mediaId === legacy.mediaId && episode.number === legacy.number,
+      ),
+    ).toHaveLength(1);
+    expect(appData.watchEvents.find((event) => event.id === 999)?.episodeId).toBe(legacy.id);
   });
 });
 
@@ -201,5 +258,56 @@ describe("manual media and watch history", () => {
         { id: "connection-1", name: "Work Catalog" },
       ).id,
     ).toBe(media.id);
+  });
+
+  test("stores localized source titles independently", () => {
+    const media = createMediaFromSource(
+      {
+        providerId: "localized-1",
+        kind: "series",
+        title: "Romaji Title",
+        titleRomaji: "Romaji Title",
+        titleEnglish: "English Title",
+        titleNative: "Native Title",
+      },
+      { id: "connection-1", name: "Catalog" },
+    );
+
+    expect(media).toMatchObject({
+      titleRomaji: "Romaji Title",
+      titleEnglish: "English Title",
+      titleNative: "Native Title",
+    });
+  });
+
+  test("attaches a source identity to an existing legacy item without replacing it", () => {
+    const media = appData.media[0];
+
+    const attached = attachSourceToMedia(
+      media.id,
+      {
+        providerId: "remote-101",
+        kind: "series",
+        title: "Fixture Series",
+        canonicalUrl: "https://catalog.example/shows/remote-101",
+      },
+      { id: "connection-1", name: "Catalog" },
+    );
+
+    expect(attached).toBe(media);
+    expect(attached).toMatchObject({
+      id: 101,
+      syncSource: {
+        kind: "connection",
+        connectionId: "connection-1",
+        providerId: "remote-101",
+      },
+    });
+    expect(attached?.providerLinks).toContainEqual({
+      connectionId: "connection-1",
+      connectionName: "Catalog",
+      providerId: "remote-101",
+      canonicalUrl: "https://catalog.example/shows/remote-101",
+    });
   });
 });

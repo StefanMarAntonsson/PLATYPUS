@@ -4,7 +4,7 @@
     appData, addToLibrary, updateLibraryEntry, removeFromLibrary,
     getLibraryEntry, getMedia,
   } from '$lib/store.svelte.js';
-  import { syncMedia } from '$lib/api/sync.js';
+  import { canSyncMedia, syncMedia } from '$lib/api/sync.js';
   import { getTitle, formatLabel, statusLabel, seasonLabel, formatAirDate, findStreamingLink } from '$lib/utils.js';
   import StatusBadge from '$lib/components/StatusBadge.svelte';
   import EpisodeGrid from '$lib/components/EpisodeGrid.svelte';
@@ -186,19 +186,21 @@
             </div>
           {/if}
 
-          <!-- Sync -->
-          <div class="space-y-1">
-            <button
-              class="w-full py-2 rounded-lg text-xs bg-surface-2 border border-border hover:border-zinc-500 text-zinc-400 hover:text-zinc-200 transition-colors flex items-center justify-center gap-1.5"
-              onclick={handleSync}
-              disabled={syncing}
-            >
-              <span class="{syncing ? 'animate-spin' : ''}">↻</span> Force Sync
-            </button>
-            {#if syncMsg}
-              <p class="text-xs text-center {syncMsg.includes('!') ? 'text-green-400' : 'text-red-400'}">{syncMsg}</p>
-            {/if}
-          </div>
+          {#if canSyncMedia(media)}
+            <!-- Sync -->
+            <div class="space-y-1">
+              <button
+                class="w-full py-2 rounded-lg text-xs bg-surface-2 border border-border hover:border-zinc-500 text-zinc-400 hover:text-zinc-200 transition-colors flex items-center justify-center gap-1.5"
+                onclick={handleSync}
+                disabled={syncing}
+              >
+                <span class="{syncing ? 'animate-spin' : ''}">↻</span> Force Sync
+              </button>
+              {#if syncMsg}
+                <p class="text-xs text-center {syncMsg.includes('!') ? 'text-green-400' : 'text-red-400'}">{syncMsg}</p>
+              {/if}
+            </div>
+          {/if}
         </aside>
 
         <!-- Right main content -->

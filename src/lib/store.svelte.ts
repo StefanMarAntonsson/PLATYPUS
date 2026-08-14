@@ -225,9 +225,9 @@ export function createMediaFromSource(
   const media: Media = {
     id: nextLocalId(appData.media),
     kind: source.kind,
-    titleRomaji: source.title,
-    titleEnglish: source.title,
-    titleNative: source.originalTitle ?? null,
+    titleRomaji: source.titleRomaji ?? source.title,
+    titleEnglish: source.titleEnglish ?? source.title,
+    titleNative: source.titleNative ?? source.originalTitle ?? null,
     status:
       source.lifecycle === "releasing"
         ? "RELEASING"
@@ -268,6 +268,52 @@ export function createMediaFromSource(
   };
   appData.media.push(media);
   addToLibrary(media.id);
+  persist();
+  return media;
+}
+
+/** Attach a configured provider identity to an existing local or legacy item. */
+export function attachSourceToMedia(
+  mediaId: number,
+  source: NormalizedMedia,
+  connection: { id: string; name: string },
+): Media | undefined {
+  const media = getMedia(mediaId);
+  if (!media) return undefined;
+
+  const providerId = String(source.providerId);
+  const canonicalUrl = source.canonicalUrl ?? undefined;
+  const providerLinks = media.providerLinks ?? [];
+  const alreadyAttached = providerLinks.some(
+    (link) => link.connectionId === connection.id && link.providerId === providerId,
+  );
+
+  if (!alreadyAttached) {
+    media.providerLinks = [
+      ...providerLinks,
+      {
+        connectionId: connection.id,
+        connectionName: connection.name,
+        providerId,
+        ...(canonicalUrl ? { canonicalUrl } : {}),
+      },
+    ];
+  }
+  media.syncSource = { kind: "connection", connectionId: connection.id, providerId };
+
+  if (canonicalUrl && !media.externalLinks.some((link) => link.url === canonicalUrl)) {
+    media.externalLinks = [
+      ...media.externalLinks,
+      {
+        url: canonicalUrl,
+        site: connection.name,
+        type: "source",
+        color: null,
+        icon: null,
+      },
+    ];
+  }
+
   persist();
   return media;
 }
@@ -353,26 +399,59 @@ export function setMovieWatched(mediaId: number, watched: boolean) {
 
 export function upsertEpisodes(incoming: Episode[]) {
   for (const ep of incoming) {
-    const idx = appData.episodes.findIndex(
-      (existing) =>
-        existing.id === ep.id ||
+    const matchingIndexes = appData.episodes.flatMap((existing, index) =>
+      existing.id === ep.id ||
+      (existing.mediaId === ep.mediaId && existing.number === ep.number) ||
+      ep.providerLinks?.some((incomingLink) =>
+        existing.providerLinks?.some(
+          (existingLink) =>
+            existingLink.connectionId === incomingLink.connectionId &&
+            existingLink.providerId === incomingLink.providerId,
+        ),
+      )
+        ? [index]
+        : [],
+    );
+
+    if (matchingIndexes.length > 0) {
+      const matches = matchingIndexes.map((index) => appData.episodes[index]);
+      const watchedMatch = matches.find((episode) => episode.watched);
+      const skippedMatch = matches.find((episode) => episode.skipped);
+      const identityMatch = matches.find((episode) =>
         ep.providerLinks?.some((incomingLink) =>
-          existing.providerLinks?.some(
+          episode.providerLinks?.some(
             (existingLink) =>
               existingLink.connectionId === incomingLink.connectionId &&
               existingLink.providerId === incomingLink.providerId,
           ),
         ),
-    );
-    if (idx >= 0) {
-      const existing = appData.episodes[idx];
-      appData.episodes[idx] = {
+      );
+      const canonical = watchedMatch ?? skippedMatch ?? identityMatch ?? matches[0];
+      const canonicalIndex = appData.episodes.indexOf(canonical);
+      const watched = !!watchedMatch;
+      appData.episodes[canonicalIndex] = {
         ...ep,
-        id: existing.id,
-        watched: existing.watched,
-        skipped: existing.skipped,
-        watchedAt: existing.watchedAt,
+        id: canonical.id,
+        title: ep.title ?? matches.find((episode) => episode.title)?.title ?? null,
+        thumbnail: ep.thumbnail ?? matches.find((episode) => episode.thumbnail)?.thumbnail ?? null,
+        watched,
+        skipped: !watched && !!skippedMatch,
+        watchedAt: watched ? (watchedMatch?.watchedAt ?? Date.now()) : null,
       };
+
+      const duplicateIds = new Set(
+        matches.filter((episode) => episode.id !== canonical.id).map((episode) => episode.id),
+      );
+      if (duplicateIds.size > 0) {
+        for (const event of appData.watchEvents) {
+          if (event.episodeId !== null && duplicateIds.has(event.episodeId)) {
+            event.episodeId = canonical.id;
+          }
+        }
+        for (const index of matchingIndexes.sort((a, b) => b - a)) {
+          if (index !== canonicalIndex) appData.episodes.splice(index, 1);
+        }
+      }
     } else {
       appData.episodes.push(ep);
     }

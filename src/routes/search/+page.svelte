@@ -3,7 +3,7 @@
   import { goto } from '$app/navigation';
   import type { NormalizedMedia, SourceConnection } from '$lib/connectors/contracts.js';
   import type { Media } from '$lib/types.js';
-  import { appData, createMediaFromSource } from '$lib/store.svelte.js';
+  import { appData, attachSourceToMedia, createMediaFromSource } from '$lib/store.svelte.js';
   import { syncMedia } from '$lib/api/sync.js';
   import { debounce } from '$lib/utils.js';
   import {
@@ -104,6 +104,21 @@
       const media = createMediaFromSource(result, connection);
       const configured = sourcesState.sources.find(source => source.connection.id === connection.id);
       if (configured?.template.operations.details || configured?.template.operations.episodes) {
+        await syncMedia(media.id);
+      }
+      addedSources = [...addedSources, key];
+    } finally {
+      addingSource = null;
+    }
+  }
+
+  async function handleAttachSource(mediaId: number, result: UnifiedSearchGroup['results'][number], connection: UnifiedSearchGroup['connection']) {
+    const key = `${connection.id}:${result.providerId}`;
+    addingSource = key;
+    try {
+      const media = attachSourceToMedia(mediaId, result, connection);
+      const configured = sourcesState.sources.find(source => source.connection.id === connection.id);
+      if (media && (configured?.template.operations.details || configured?.template.operations.episodes)) {
         await syncMedia(media.id);
       }
       addedSources = [...addedSources, key];
@@ -272,7 +287,7 @@
                     {#if exactMediaId !== null}
                       <a href={mediaHref(exactMediaId)} class="block whitespace-nowrap rounded-lg border border-accent/30 bg-accent/10 px-2.5 py-1.5 text-xs text-accent hover:bg-accent/20">✓ View</a>
                     {:else if libraryItem}
-                      <span class="block whitespace-nowrap rounded-lg border border-border px-2.5 py-1.5 text-xs text-zinc-500" title="This title is already in your library from another source">In library</span>
+                      <button class="whitespace-nowrap rounded-lg border border-border bg-surface-2 px-2.5 py-1.5 text-xs text-zinc-300 transition-colors hover:border-accent hover:text-accent disabled:opacity-50" onclick={() => handleAttachSource(libraryItem.id, result.result, result.connection)} disabled={addingSource === result.key}>{addingSource === result.key ? '…' : 'Attach source'}</button>
                     {:else}
                       <button class="whitespace-nowrap rounded-lg border border-border bg-surface-2 px-2.5 py-1.5 text-xs text-zinc-300 transition-colors hover:border-accent hover:text-accent disabled:opacity-50" onclick={() => handleAddSource(result.result, result.connection)} disabled={addingSource === result.key || addedSources.includes(result.key)}>{addedSources.includes(result.key) ? 'Added' : addingSource === result.key ? '…' : '+ Add'}</button>
                     {/if}
