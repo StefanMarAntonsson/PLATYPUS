@@ -12,6 +12,7 @@
   import CollectionSuggestDialog from '$lib/components/CollectionSuggestDialog.svelte';
   import { openExternalUrl } from '$lib/external-links.js';
   import { virtualGridWindow } from '$lib/virtual-grid.js';
+  import { filterLibraryItemsForView } from '$lib/library-view.js';
 
   interface Props {
     view?: 'library' | 'watchlist';
@@ -105,10 +106,9 @@
   interface LibraryItem { media: Media; entry: typeof appData.library[0] }
 
   const allItems = $derived.by<LibraryItem[]>(() =>
-    appData.library
+    filterLibraryItemsForView(appData.library
       .map(entry => ({ entry, media: appData.media.find(m => m.id === entry.mediaId) }))
-      .filter((x): x is LibraryItem => !!x.media)
-      .filter(({ entry }) => isWatchlist ? entry.status !== 'COMPLETED' : entry.status === 'COMPLETED')
+      .filter((x): x is LibraryItem => !!x.media), view)
   );
 
   function matchesFilter(item: LibraryItem, f: CollectionFilter): boolean {
@@ -158,7 +158,7 @@
 
   // Watchlist tabs filter the poster grid without hiding the independent Up Next strip.
   const airingItems = $derived((isWatchlist ? searchedItems : items).filter(x => x.media.status === 'RELEASING'));
-  const gridItems = $derived(isWatchlist ? items : items.filter(x => x.media.status !== 'RELEASING'));
+  const gridItems = $derived(items);
 
   // Rotate the schedule around the local day so Up Next always starts with today.
   // Date.getDay() is 0=Sun..6=Sat.
