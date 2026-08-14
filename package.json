@@ -1,6 +1,6 @@
 {
   "name": "platypus",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "private": true,
   "description": "A local-first personal media tracker",
   "license": "MIT",
@@ -16,13 +16,17 @@
     "preview": "vp preview",
     "desktop:dev": "tauri dev",
     "desktop:build": "tauri build",
+    "version:set": "node scripts/set-version.mjs",
+    "version:check": "node scripts/set-version.mjs --check",
     "prepare": "vp config && svelte-kit sync || echo ''",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",
-    "@tauri-apps/plugin-dialog": "^2.7.2"
+    "@tauri-apps/plugin-dialog": "^2.7.2",
+    "@tauri-apps/plugin-process": "~2",
+    "@tauri-apps/plugin-updater": "~2"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.10",

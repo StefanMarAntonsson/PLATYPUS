@@ -8,6 +8,8 @@
   import { isTauri } from '@tauri-apps/api/core';
   import { fs, initFile } from '$lib/store.svelte.js';
   import NotificationOverlay from '$lib/components/NotificationOverlay.svelte';
+  import AppUpdateBanner from '$lib/components/AppUpdateBanner.svelte';
+  import { initializeAppUpdates } from '$lib/app-update.svelte.js';
   import { initSources } from '$lib/sources.svelte.js';
 
   let { children } = $props();
@@ -33,6 +35,7 @@
 
   onMount(() => {
     if (!isTauri()) return;
+    void initializeAppUpdates();
     // Let the window module finish initializing before its constructor is used.
     void import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
       desktopWindow = getCurrentWindow();
@@ -152,3 +155,4 @@
 </div>
 
 <NotificationOverlay />
+<AppUpdateBanner />
