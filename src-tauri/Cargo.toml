@@ -1,6 +1,6 @@
 [package]
 name = "platypus"
-version = "0.0.5"
+version = "0.0.6"
 description = "A personal media tracker"
 authors = ["Stefan Mar Antonsson"]
 license = "MIT"
