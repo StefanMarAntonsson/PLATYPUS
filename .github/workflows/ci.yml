@@ -30,6 +30,7 @@ jobs:
           node-version: "22"
           cache: true
       - run: vp install --frozen-lockfile
+      - run: vp run version:check
       - run: vp pm audit
       - run: vp check
       - run: vp test

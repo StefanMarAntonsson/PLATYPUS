@@ -3,7 +3,13 @@
   import { appData, fs, updateSettings, previewV2Import, importV2Data } from '$lib/store.svelte.js';
   import type { V2MigrationPreview } from '$lib/v2-migration.js';
   import { saveDesktopBackup } from '$lib/repositories.js';
-  import { availableExternalBrowsers, type BrowserOption } from '$lib/external-links.js';
+  import { availableExternalBrowsers, openExternalUrl, type BrowserOption } from '$lib/external-links.js';
+  import {
+    RELEASES_URL,
+    appUpdate,
+    checkForAppUpdate,
+    installAppUpdate,
+  } from '$lib/app-update.svelte.js';
   import { onMount } from 'svelte';
   import SourcesPage from '../sources/+page.svelte';
 
@@ -90,6 +96,57 @@
     <div class="w-full max-w-3xl space-y-4">
 
       {#if activeSection === 'general'}
+        <section class="overflow-hidden rounded-md border border-border bg-surface-2/30">
+          <div class="border-b border-border px-4 py-3">
+            <h2 class="text-sm font-semibold text-zinc-200">Application updates</h2>
+            <p class="mt-0.5 text-xs text-zinc-500">
+              AppImage updates are signed and can be installed in place. Debian packages remain managed through APT.
+            </p>
+          </div>
+          <div class="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+            <div>
+              <p class="text-sm text-zinc-300">
+                Version {appUpdate.currentVersion || 'unknown'}
+                {#if appUpdate.availableVersion}
+                  <span class="ml-2 text-amber-400">Version {appUpdate.availableVersion} available</span>
+                {:else if appUpdate.status === 'idle'}
+                  <span class="ml-2 text-emerald-500">Up to date</span>
+                {/if}
+              </p>
+              <p class="mt-0.5 text-xs text-zinc-500">
+                {appUpdate.installationKind === 'appimage'
+                  ? 'AppImage installation · in-app updates enabled'
+                  : appUpdate.installationKind === 'package'
+                    ? 'System package installation · download updates from GitHub Releases'
+                    : appUpdate.installationKind === 'development'
+                      ? 'Development build · installation disabled'
+                      : 'Update checks are available in the desktop app'}
+              </p>
+              {#if appUpdate.status === 'error' && appUpdate.error}
+                <p class="mt-1 max-w-xl text-xs text-red-400">{appUpdate.error}</p>
+              {/if}
+            </div>
+            <div class="flex flex-wrap gap-2">
+              {#if appUpdate.status === 'available' && appUpdate.canSelfUpdate}
+                <button
+                  class="rounded-md bg-accent px-3 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
+                  onclick={() => void installAppUpdate()}
+                >Install and restart</button>
+              {:else if appUpdate.status === 'available'}
+                <button
+                  class="rounded-md bg-accent px-3 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
+                  onclick={() => void openExternalUrl(RELEASES_URL, s.externalBrowser)}
+                >Open GitHub release</button>
+              {/if}
+              <button
+                class="rounded-md border border-border bg-zinc-900 px-3 py-2 text-sm text-zinc-300 transition-colors hover:border-zinc-500 hover:text-white disabled:cursor-wait disabled:opacity-50"
+                disabled={appUpdate.status === 'checking' || appUpdate.status === 'downloading' || appUpdate.status === 'installing' || appUpdate.status === 'unavailable'}
+                onclick={() => void checkForAppUpdate(true)}
+              >{appUpdate.status === 'checking' ? 'Checking…' : 'Check for updates'}</button>
+            </div>
+          </div>
+        </section>
+
         <section class="overflow-hidden rounded-md border border-border bg-surface-2/30">
           <div class="border-b border-border px-4 py-3">
             <h2 class="text-sm font-semibold text-zinc-200">External links</h2>

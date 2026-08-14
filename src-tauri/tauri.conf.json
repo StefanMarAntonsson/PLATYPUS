@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "PLATYPUS",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "identifier": "io.github.stefanmarantonsson.platypus",
   "build": {
     "beforeDevCommand": "vp dev --host 127.0.0.1 --port 1420",
@@ -27,6 +27,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": ["appimage", "deb"],
     "icon": [
       "icons/32x32.png",
@@ -38,5 +39,13 @@
     "category": "Utility",
     "shortDescription": "Personal media tracker",
     "longDescription": "A local-first personal tracker for anime, movies, and television."
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE0MUJFNDUwMkM3NEU4ODUKUldTRjZIUXNVT1FiRkJDNEw2SUJlby9OcFBjZDY0YUk4MEgzdHc3YUJQR1RTNmQrRjBEaVVvUEUK",
+      "endpoints": [
+        "https://github.com/StefanMarAntonsson/PLATYPUS/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

@@ -37,6 +37,7 @@ export const fs = $state({
 
 // Private — not reactive, used to debounce native repository writes.
 let _saveTimer: ReturnType<typeof setTimeout> | undefined;
+let _savePromise: Promise<void> | undefined;
 const DESKTOP_DATA_KEY = "platypus-desktop-bootstrap-data";
 
 function applyData(data: AppData) {
@@ -67,15 +68,35 @@ export function persist() {
 }
 
 async function doSave() {
+  _saveTimer = undefined;
   fs.isSaving = true;
   fs.saveError = "";
-  try {
-    await desktopAppDataRepository.save(appData);
-    fs.saveError = "";
-  } catch (e) {
-    fs.saveError = e instanceof Error ? e.message : "Save failed";
-  } finally {
+  const save = desktopAppDataRepository.save(appData);
+  _savePromise = save;
+  await save
+    .then(() => {
+      fs.saveError = "";
+    })
+    .catch((e: unknown) => {
+      fs.saveError = e instanceof Error ? e.message : "Save failed";
+    });
+  if (_savePromise === save) {
+    _savePromise = undefined;
     fs.isSaving = false;
+  }
+}
+
+/** Finish any queued native write before an updater-triggered restart. */
+export async function flushPendingSave(): Promise<void> {
+  if (_saveTimer !== undefined) {
+    clearTimeout(_saveTimer);
+    await doSave();
+  } else if (_savePromise) {
+    await _savePromise.catch(() => undefined);
+  }
+
+  if (fs.saveError) {
+    throw new Error(`PLATYPUS could not save your library: ${fs.saveError}`);
   }
 }
 

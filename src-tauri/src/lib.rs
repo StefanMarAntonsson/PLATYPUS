@@ -27,6 +27,13 @@ struct BrowserOption {
     label: &'static str,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateInstallation {
+    kind: &'static str,
+    can_self_update: bool,
+}
+
 const BROWSERS: [(&str, &str, &str); 6] = [
     ("firefox", "Firefox", "firefox"),
     ("chromium", "Chromium", "chromium"),
@@ -55,6 +62,24 @@ fn available_browsers() -> Vec<BrowserOption> {
             .map(|(id, label, _)| BrowserOption { id, label }),
     );
     options
+}
+
+#[tauri::command]
+fn update_installation() -> UpdateInstallation {
+    if cfg!(debug_assertions) {
+        return UpdateInstallation {
+            kind: "development",
+            can_self_update: false,
+        };
+    }
+
+    // Tauri's Linux updater replaces the currently running AppImage. Debian
+    // packages are owned by APT and must never be overwritten by the app.
+    let is_appimage = cfg!(target_os = "linux") && env::var_os("APPIMAGE").is_some();
+    UpdateInstallation {
+        kind: if is_appimage { "appimage" } else { "package" },
+        can_self_update: is_appimage,
+    }
 }
 
 fn browser_executable(browser: &str) -> Result<&'static str, String> {
@@ -445,6 +470,8 @@ pub fn run() {
     }
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             load_app_data,
@@ -455,7 +482,8 @@ pub fn run() {
             save_sources_bundle,
             connector_request,
             available_browsers,
-            open_external_url
+            open_external_url,
+            update_installation
         ])
         .run(tauri::generate_context!())
         .expect("error while running PLATYPUS");

@@ -11,6 +11,19 @@ Download the latest Linux package from [GitHub Releases](https://github.com/Stef
 
 Each release includes a `SHA256SUMS` file for verifying downloads.
 
+## Update an installation
+
+- AppImage: updater-enabled releases check GitHub automatically. When a signed
+  update is available, choose **Install and restart** in the update notice or in
+  **Settings → General → Application updates**.
+- Debian/Ubuntu: download the newer `.deb` from GitHub Releases and run
+  `sudo apt install ./PLATYPUS_*_amd64.deb`. PLATYPUS deliberately leaves these
+  installations under APT's control instead of replacing package-owned files.
+
+Versions installed before the in-app updater was introduced must be upgraded
+manually once. Library data is stored separately from the application package
+and remains in place across upgrades.
+
 Maintainers can publish a release by following the
 [release guide](docs/releasing.md).
 
