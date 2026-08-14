@@ -1,6 +1,6 @@
 {
   "name": "platypus",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "private": true,
   "description": "A local-first personal media tracker",
   "license": "MIT",
@@ -41,7 +41,7 @@
   },
   "overrides": {
     "cookie": "0.7.2",
-    "nanoid": "3.3.17",
+    "nanoid": "3.3.18",
     "postcss": "8.5.26",
     "vite": "npm:@voidzero-dev/vite-plus-core@latest",
     "ws": "8.21.3"
