@@ -125,8 +125,20 @@ describe("automatic library status", () => {
 
 describe("manual media and watch history", () => {
   test("creates a provider-independent movie and records its watch event", () => {
-    const movie = createManualMedia({ title: "Perfect Days", kind: "movie", year: 2023 });
-    expect(movie).toMatchObject({ kind: "movie", format: "MOVIE", titleEnglish: "Perfect Days" });
+    const coverImage = "data:image/png;base64,cGxhdHlwdXM=";
+    const movie = createManualMedia({
+      title: "Perfect Days",
+      kind: "movie",
+      year: 2023,
+      coverImage,
+    });
+    expect(movie).toMatchObject({
+      kind: "movie",
+      format: "MOVIE",
+      titleEnglish: "Perfect Days",
+      coverImageLarge: coverImage,
+      coverImageMedium: coverImage,
+    });
     expect(appData.library.some((entry) => entry.mediaId === movie.id)).toBe(true);
 
     setMovieWatched(movie.id, true);

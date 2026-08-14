@@ -36,7 +36,7 @@ vp install
 vp run desktop:dev
 ```
 
-The first desktop launch creates the SQLite library automatically. In **Settings → Sources**, configure a REST/JSON or GraphQL search endpoint and its response mappings, or use **Import sources** to load a trusted `platypus-sources.json` bundle. **Export all** saves the configured connections as one portable file. Then use **Search** to find and add media from the enabled sources.
+The first desktop launch creates the SQLite library automatically. In **Settings → Sources**, configure a REST/JSON or GraphQL search endpoint and its response mappings, or use **Import sources** to load a trusted `platypus-sources.json` bundle. **Export all** saves the configured connections as one portable file. Then use **Search** to find and add media from the enabled sources, or choose **Add manually** to track a movie or series without a source.
 
 The in-app source form creates search-only connections. Search results from those connections can be added using the metadata returned by the search endpoint. Details, episode refresh, and tracking operations require a trusted imported source bundle that declares those operations.
 

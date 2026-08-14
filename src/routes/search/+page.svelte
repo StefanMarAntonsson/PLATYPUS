@@ -1,5 +1,6 @@
 <script lang="ts">
   import { base } from '$app/paths';
+  import { goto } from '$app/navigation';
   import type { NormalizedMedia, SourceConnection } from '$lib/connectors/contracts.js';
   import type { Media } from '$lib/types.js';
   import { appData, createMediaFromSource } from '$lib/store.svelte.js';
@@ -13,6 +14,7 @@
   } from '$lib/search-grouping.js';
   import { searchState, sourceQueryCache } from './state.svelte.js';
   import { searchSources, sourcesState, type UnifiedSearchGroup } from '$lib/sources.svelte.js';
+  import AddMediaDialog from '$lib/components/AddMediaDialog.svelte';
 
   const inLibrary = $derived(new Set(appData.library.map(l => l.mediaId)));
 
@@ -26,6 +28,7 @@
   let addingSource = $state<string | null>(null);
   let addedSources = $state<string[]>([]);
   let searchInput = $state<HTMLInputElement | null>(null);
+  let addingManually = $state(false);
 
   // Holds the AbortController for the current in-flight search.
   // Component-scoped is fine — race conditions are within a single page visit.
@@ -174,10 +177,15 @@
   }
 
   const sourceErrors = $derived(searchState.sourceGroups.filter(group => group.error));
+
+  function openCreatedMedia(mediaId: number) {
+    addingManually = false;
+    void goto(`${base}/media/${mediaId}`);
+  }
 </script>
 
 <div class="space-y-5">
-  <div class="flex items-center justify-center px-4 py-3 md:px-6">
+  <div class="flex items-center justify-center gap-2 px-4 py-3 md:px-6">
     <label class="relative w-full min-w-56 lg:max-w-2xl">
       <span class="sr-only">Search media sources</span>
       <svg class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
@@ -198,6 +206,10 @@
         <kbd class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-border bg-zinc-900 px-1.5 py-0.5 text-[10px] text-zinc-500">Ctrl K</kbd>
       {/if}
     </label>
+    <button
+      class="shrink-0 rounded-md bg-accent px-3 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
+      onclick={() => addingManually = true}
+    >+ Add manually</button>
   </div>
 
   <div class="space-y-5 px-4 pb-6 md:px-6">
@@ -274,3 +286,7 @@
     {/if}
   </div>
 </div>
+
+{#if addingManually}
+  <AddMediaDialog onclose={() => addingManually = false} oncreated={openCreatedMedia} />
+{/if}

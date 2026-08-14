@@ -161,6 +161,7 @@ export interface ManualMediaInput {
   totalEpisodes?: number | null;
   year?: number | null;
   description?: string | null;
+  coverImage?: string | null;
 }
 
 /** Create a local item with no remote identity. Manual items are always safe to edit. */
@@ -178,8 +179,8 @@ export function createManualMedia(input: ManualMediaInput): Media {
     airedEpisodes: input.kind === "movie" ? 1 : (input.totalEpisodes ?? 0),
     nextAiringEpisode: null,
     nextAiringAt: null,
-    coverImageLarge: null,
-    coverImageMedium: null,
+    coverImageLarge: input.coverImage ?? null,
+    coverImageMedium: input.coverImage ?? null,
     bannerImage: null,
     season: null,
     seasonYear: input.year ?? null,
