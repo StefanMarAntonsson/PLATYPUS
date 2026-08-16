@@ -15,9 +15,38 @@ vi.mock("$lib/sources.svelte.js", () => ({
 }));
 
 import { appData } from "$lib/store.svelte.js";
+import { ConnectorRequestError } from "$lib/connectors/engine.js";
 import { EMPTY_APP_DATA } from "$lib/legacy-data.js";
 import type { Media } from "$lib/types.js";
-import { canSyncMedia, syncAllLibrary, syncMedia } from "./sync.js";
+import { canSyncMedia, syncAiringLibrary, syncMedia } from "./sync.js";
+
+function sourceMedia(id: number, connectionId = "catalog-connection"): Media {
+  return {
+    id,
+    kind: "series",
+    titleRomaji: `Airing title ${id}`,
+    titleEnglish: null,
+    titleNative: null,
+    status: "RELEASING",
+    format: "TV",
+    totalEpisodes: 12,
+    airedEpisodes: 10,
+    nextAiringEpisode: 11,
+    nextAiringAt: null,
+    coverImageLarge: null,
+    coverImageMedium: null,
+    bannerImage: null,
+    season: null,
+    seasonYear: null,
+    genres: [],
+    description: null,
+    siteUrl: "",
+    externalLinks: [],
+    syncedAt: 0,
+    malId: null,
+    syncSource: { kind: "connection", connectionId, providerId: String(id) },
+  };
+}
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -57,12 +86,62 @@ afterEach(() => {
 
 describe("bulk synchronization", () => {
   test("does not contact a provider for media without a configured source", async () => {
-    appData.library.push({ ...appData.library[0], id: 3, mediaId: -1 });
+    appData.media.push({ ...sourceMedia(1), syncSource: undefined });
 
-    const result = await syncAllLibrary();
+    const result = await syncAiringLibrary();
 
     expect(fetchSourceMediaUpdate).not.toHaveBeenCalled();
     expect(result).toEqual({ status: "success", updated: 0 });
+  });
+
+  test("stops contacting a connection after a provider-wide failure", async () => {
+    appData.media.push(sourceMedia(1), sourceMedia(2));
+    fetchSourceMediaUpdate.mockRejectedValue(
+      new ConnectorRequestError("Request failed (503)", true, 503),
+    );
+
+    const result = await syncAiringLibrary();
+
+    expect(fetchSourceMediaUpdate).toHaveBeenCalledTimes(1);
+    expect(fetchSourceMediaUpdate).toHaveBeenCalledWith("catalog-connection", "1");
+    expect(result).toEqual({
+      status: "error",
+      message: "1 of 2 failed; 1 skipped because a source was unavailable",
+      updated: 0,
+    });
+  });
+
+  test("continues syncing other connections after one becomes unavailable", async () => {
+    appData.media.push(sourceMedia(1, "down"), sourceMedia(2, "down"), sourceMedia(3, "healthy"));
+    appData.library.push({ ...appData.library[0], id: 3, mediaId: 3 });
+    fetchSourceMediaUpdate.mockImplementation(async (connectionId: string) => {
+      if (connectionId === "down") {
+        throw new ConnectorRequestError("Request failed (503)", true, 503);
+      }
+      return { source: {}, episodes: [] };
+    });
+
+    const syncing = syncAiringLibrary();
+    await vi.runAllTimersAsync();
+    const result = await syncing;
+
+    expect(fetchSourceMediaUpdate).toHaveBeenCalledTimes(2);
+    expect(fetchSourceMediaUpdate).toHaveBeenLastCalledWith("healthy", "3");
+    expect(result.updated).toBe(1);
+  });
+
+  test("does not block a connection after an item-specific failure", async () => {
+    appData.media.push(sourceMedia(1), sourceMedia(2));
+    fetchSourceMediaUpdate
+      .mockRejectedValueOnce(new ConnectorRequestError("Request failed (404)", false, 404))
+      .mockResolvedValueOnce({ source: {}, episodes: [] });
+
+    const syncing = syncAiringLibrary();
+    await vi.runAllTimersAsync();
+    const result = await syncing;
+
+    expect(fetchSourceMediaUpdate).toHaveBeenCalledTimes(2);
+    expect(result.updated).toBe(1);
   });
 
   test("does not use a legacy embedded AniList target without an explicit connection", async () => {

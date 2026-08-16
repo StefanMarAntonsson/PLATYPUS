@@ -15,6 +15,11 @@ export function getTitle(media: Media, lang: TitleLanguage): string {
   return media.titleRomaji;
 }
 
+/** A media item is manual only when it has no identity owned by a sync source. */
+export function isManualMedia(media: Media): boolean {
+  return media.syncSource === undefined && !media.providerLinks?.length;
+}
+
 export function formatLabel(format: MediaFormat): string {
   const map: Record<MediaFormat, string> = {
     TV: "TV",

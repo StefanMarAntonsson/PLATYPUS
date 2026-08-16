@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from "vite-plus/test";
 import restTemplate from "./fixtures/rest-source.platypus-source.json";
-import { ConnectorEngine, validateSourceTemplate } from "./engine.js";
+import { ConnectorEngine, isConnectorUnavailableError, validateSourceTemplate } from "./engine.js";
 import type { SourceConnection, SourceTemplateV1 } from "./contracts.js";
 
 const template = restTemplate as SourceTemplateV1;
@@ -150,6 +150,39 @@ describe("connector engine", () => {
     await expect(
       engine.execute(template, connection, "search", { input: { query: "seven" } }),
     ).rejects.toThrow("redirected");
+  });
+
+  test.each([
+    [401, true],
+    [429, true],
+    [503, true],
+    [404, false],
+  ])("classifies HTTP %i connection availability", async (status, unavailable) => {
+    const engine = new ConnectorEngine({
+      fetch: async () => new Response(null, { status }),
+      resolveSecret: async () => "secret",
+    });
+
+    const error = await engine
+      .execute(template, connection, "details", { input: { providerId: "7" } })
+      .catch((reason: unknown) => reason);
+
+    expect(isConnectorUnavailableError(error)).toBe(unavailable);
+  });
+
+  test("classifies network failures as connection-wide", async () => {
+    const engine = new ConnectorEngine({
+      fetch: async () => {
+        throw new TypeError("fetch failed");
+      },
+      resolveSecret: async () => "secret",
+    });
+
+    const error = await engine
+      .execute(template, connection, "details", { input: { providerId: "7" } })
+      .catch((reason: unknown) => reason);
+
+    expect(isConnectorUnavailableError(error)).toBe(true);
   });
 
   test("returns one unmodified payload for source-builder previews", async () => {

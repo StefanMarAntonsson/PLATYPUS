@@ -1,5 +1,12 @@
 import { expect, test, vi, beforeEach, afterEach } from "vite-plus/test";
-import { formatCountdown, isOnBreak, streamingIconUrl, streamingSiteFromUrl } from "./utils.js";
+import type { Media } from "./types.js";
+import {
+  formatCountdown,
+  isManualMedia,
+  isOnBreak,
+  streamingIconUrl,
+  streamingSiteFromUrl,
+} from "./utils.js";
 
 const HOUR = 3_600_000;
 const DAY = 86_400_000;
@@ -36,6 +43,23 @@ test("isOnBreak is true only beyond a week out", () => {
   expect(isOnBreak(null)).toBe(false);
   expect(isOnBreak(Date.now() + 3 * DAY)).toBe(false);
   expect(isOnBreak(Date.now() + 8 * DAY)).toBe(true);
+});
+
+test("isManualMedia uses source ownership instead of the local ID namespace", () => {
+  expect(isManualMedia({ id: -1 } as Media)).toBe(true);
+  expect(isManualMedia({ id: 42 } as Media)).toBe(true);
+  expect(
+    isManualMedia({
+      id: -2,
+      syncSource: { kind: "connection", connectionId: "tmdb", providerId: "123" },
+    } as Media),
+  ).toBe(false);
+  expect(
+    isManualMedia({
+      id: -3,
+      providerLinks: [{ connectionId: "tmdb", connectionName: "TMDB", providerId: "456" }],
+    } as Media),
+  ).toBe(false);
 });
 
 test("streaming platform icons use Dashboard Icons CDN filenames", () => {
