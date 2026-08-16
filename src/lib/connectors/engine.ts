@@ -36,6 +36,29 @@ export interface ConnectorEngineOptions {
   now?: () => number;
 }
 
+/**
+ * A request failure that applies to the connection rather than one media item.
+ * Bulk jobs use this signal to stop contacting an unhealthy provider.
+ */
+export class ConnectorRequestError extends Error {
+  constructor(
+    message: string,
+    readonly connectionUnavailable: boolean,
+    readonly status?: number,
+  ) {
+    super(message);
+    this.name = "ConnectorRequestError";
+  }
+}
+
+export function isConnectorUnavailableError(error: unknown): boolean {
+  return error instanceof ConnectorRequestError && error.connectionUnavailable;
+}
+
+function statusMakesConnectionUnavailable(status: number): boolean {
+  return [401, 403, 408, 425, 429].includes(status) || status >= 500;
+}
+
 interface NativeConnectorResponse {
   status: number;
   body: string;
@@ -507,21 +530,33 @@ export class ConnectorEngine {
           : AbortSignal.timeout(timeoutMs),
         redirect: "manual",
       };
-      if (this.useNativeFetcher) {
-        const native = await invoke<NativeConnectorResponse>("connector_request", {
-          url: url.toString(),
-          method: request.method,
-          headers: Object.fromEntries(headers.entries()),
-          body,
-          allowedHosts: template.allowedHosts,
-          timeoutMs,
-        });
-        response = new Response(native.body, {
-          status: native.status,
-          headers: native.headers,
-        });
-      } else {
-        response = await this.fetcher(url.toString(), requestInit);
+      try {
+        if (this.useNativeFetcher) {
+          const native = await invoke<NativeConnectorResponse>("connector_request", {
+            url: url.toString(),
+            method: request.method,
+            headers: Object.fromEntries(headers.entries()),
+            body,
+            allowedHosts: template.allowedHosts,
+            timeoutMs,
+          });
+          response = new Response(native.body, {
+            status: native.status,
+            headers: native.headers,
+          });
+        } else {
+          response = await this.fetcher(url.toString(), requestInit);
+        }
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        const timedOut = error instanceof Error && error.name === "TimeoutError";
+        const message =
+          error instanceof Error
+            ? error.message
+            : typeof error === "string"
+              ? error
+              : "Source request failed (network)";
+        throw new ConnectorRequestError(timedOut ? "Source request timed out" : message, true);
       }
       if (response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400))
         throw new Error("Source request was redirected; redirects are not permitted");
@@ -535,7 +570,14 @@ export class ConnectorEngine {
         setTimeout(resolve, Math.min(operation.retry?.backoffMs ?? 0, 60_000) * 2 ** attempt),
       );
     }
-    if (!response?.ok) throw new Error(`Request failed (${response?.status ?? "network"})`);
+    if (!response?.ok) {
+      const status = response?.status;
+      throw new ConnectorRequestError(
+        `Request failed (${status ?? "network"})`,
+        status === undefined || statusMakesConnectionUnavailable(status),
+        status,
+      );
+    }
     return (await response.json()) as Json;
   }
 }

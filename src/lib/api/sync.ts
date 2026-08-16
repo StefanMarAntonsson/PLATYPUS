@@ -1,4 +1,5 @@
 import type { Media, Episode } from "$lib/types.js";
+import { isConnectorUnavailableError } from "$lib/connectors/engine.js";
 import { sleep } from "./http.js";
 import { notify } from "$lib/notifications.svelte.js";
 import { appData, getMedia, upsertMedia, upsertEpisodes } from "$lib/store.svelte.js";
@@ -15,6 +16,8 @@ export interface SyncResult {
   message?: string;
   added?: number;
   updated?: number;
+  /** Internal bulk-sync signal: retrying another item on this connection is unsafe. */
+  connectionUnavailable?: boolean;
 }
 
 // In-flight deduplication: if syncMedia(id) is called while id is already syncing,
@@ -179,7 +182,11 @@ async function _syncConfiguredSourceMedia(
   } catch (error) {
     const message = errMsg(error);
     notify("error", "Failed to sync", `${label}: ${message}`);
-    return { status: "error", message };
+    return {
+      status: "error",
+      message,
+      ...(isConnectorUnavailableError(error) ? { connectionUnavailable: true } : {}),
+    };
   }
 }
 
@@ -244,36 +251,12 @@ export function syncMedia(mediaId: number): Promise<SyncResult> {
 // Keep bulk synchronization conservative across user-configured providers.
 const BULK_THROTTLE_MS = 700;
 
-export async function syncAllLibrary(): Promise<SyncResult> {
-  const ids = appData.library
-    .map((entry) => entry.mediaId)
-    .filter((mediaId) => canSyncMedia(getMedia(mediaId)));
-  let errors = 0;
-
-  for (let i = 0; i < ids.length; i++) {
-    const r = await syncMedia(ids[i]);
-    if (r.status === "error") errors++;
-    if (i < ids.length - 1) await sleep(BULK_THROTTLE_MS);
-  }
-
-  if (errors === 0) {
-    notify(
-      "success",
-      "Library synced",
-      `${ids.length} title${ids.length === 1 ? "" : "s"} updated.`,
-    );
-    return { status: "success", updated: ids.length };
-  }
-  // Per-title failures are surfaced individually from _syncMedia.
-  return { status: "error", message: `${errors} of ${ids.length} failed` };
-}
-
 export async function syncAiringLibrary(
   signal?: AbortSignal,
   onProgress?: (done: number, total: number) => void,
 ): Promise<SyncResult> {
   const { syncFilters } = appData.settings;
-  const ids = appData.library
+  const targets = appData.library
     .map((l) => appData.media.find((m) => m.id === l.mediaId))
     .filter((m): m is Media => !!m)
     .filter(
@@ -282,20 +265,45 @@ export async function syncAiringLibrary(
         (syncFilters.upcoming && m.status === "NOT_YET_RELEASED") ||
         (syncFilters.hiatus && m.status === "HIATUS"),
     )
-    .filter((media) => canSyncMedia(media))
-    .map((m) => m.id);
+    .map((media) => ({ media, target: syncTarget(media.id) }))
+    .filter(
+      (
+        item,
+      ): item is typeof item & {
+        target: Extract<Media["syncSource"], { kind: "connection" }>;
+      } => !!item.target && canRefreshFromSource(item.target.connectionId),
+    )
+    .map(({ media, target }) => ({ mediaId: media.id, connectionId: target.connectionId }));
 
   let errors = 0;
   let done = 0;
-  onProgress?.(0, ids.length);
+  let skipped = 0;
+  const unavailableConnections = new Set<string>();
+  onProgress?.(0, targets.length);
 
-  for (let i = 0; i < ids.length; i++) {
+  for (let i = 0; i < targets.length; i++) {
     if (signal?.aborted) break;
-    const r = await syncMedia(ids[i]);
-    if (r.status === "error") errors++;
+    const target = targets[i];
+    if (unavailableConnections.has(target.connectionId)) {
+      skipped++;
+      done++;
+      onProgress?.(done, targets.length);
+      continue;
+    }
+
+    const result = await syncMedia(target.mediaId);
+    if (result.status === "error") {
+      errors++;
+      if (result.connectionUnavailable) {
+        unavailableConnections.add(target.connectionId);
+      }
+    }
     done++;
-    onProgress?.(done, ids.length);
-    if (i < ids.length - 1) {
+    onProgress?.(done, targets.length);
+    const hasAnotherRequest = targets
+      .slice(i + 1)
+      .some((next) => !unavailableConnections.has(next.connectionId));
+    if (hasAnotherRequest) {
       try {
         await sleep(BULK_THROTTLE_MS, signal);
       } catch {
@@ -305,12 +313,17 @@ export async function syncAiringLibrary(
   }
 
   if (errors > 0) {
-    // Per-title failures are surfaced individually from _syncMedia.
-    return { status: "error", message: `${errors} of ${ids.length} failed` };
+    const skippedMessage =
+      skipped > 0 ? `; ${skipped} skipped because a source was unavailable` : "";
+    return {
+      status: "error",
+      message: `${errors} of ${targets.length} failed${skippedMessage}`,
+      updated: done - errors - skipped,
+    };
   }
   // Don't announce a cancelled or no-op run.
   if (!signal?.aborted && done > 0) {
     notify("success", "Airing titles synced", `${done} title${done === 1 ? "" : "s"} updated.`);
   }
-  return { status: "success", updated: done };
+  return { status: "success", updated: done - skipped };
 }
