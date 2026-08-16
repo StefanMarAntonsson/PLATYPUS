@@ -12,7 +12,7 @@
   import CollectionSuggestDialog from '$lib/components/CollectionSuggestDialog.svelte';
   import { openExternalUrl } from '$lib/external-links.js';
   import { virtualGridWindow } from '$lib/virtual-grid.js';
-  import { filterLibraryItemsForView } from '$lib/library-view.js';
+  import { catchUpDetails, filterLibraryItemsForView, selectCatchUpItems, type CatchUpSort } from '$lib/library-view.js';
 
   interface Props {
     view?: 'library' | 'watchlist';
@@ -29,15 +29,19 @@
   const isWatchlist = $derived(view === 'watchlist');
   const pageTitle = $derived(isWatchlist ? 'Watchlist' : 'Library');
 
-  const FILTER_LABELS: Record<CollectionFilter, string> = {
-    WATCHING: 'Watching', AIRING: 'Airing', PLANNED: 'Planned', COMPLETED: 'Completed',
+  type WatchlistFilter = 'WATCHING' | 'CATCH_UP' | 'PLANNED';
+  type ActiveFilter = CollectionFilter | 'CATCH_UP';
+
+  const FILTER_LABELS: Record<WatchlistFilter, string> = {
+    WATCHING: 'Watching', CATCH_UP: 'Catch Up', PLANNED: 'Planned',
   };
-  const WATCHLIST_FILTERS: CollectionFilter[] = ['WATCHING', 'PLANNED'];
+  const WATCHLIST_FILTERS: WatchlistFilter[] = ['WATCHING', 'CATCH_UP', 'PLANNED'];
 
   const STATUS_ORDER: Record<string, number> = { WATCHING: 0, PLAN_TO_WATCH: 1, COMPLETED: 2 };
 
-  let activeFilters = $state<CollectionFilter[]>([]);
+  let activeFilters = $state<ActiveFilter[]>([]);
   let sortBy = $state<SortOption>('default');
+  let catchUpSort = $state<CatchUpSort>('backlog');
 
   // Use untrack so this only fires when fs.status changes, not on every settings mutation.
   // Without untrack, writing lastSyncedAt (or any setting) would reset the user's manual
@@ -111,8 +115,9 @@
       .filter((x): x is LibraryItem => !!x.media), view)
   );
 
-  function matchesFilter(item: LibraryItem, f: CollectionFilter): boolean {
+  function matchesFilter(item: LibraryItem, f: ActiveFilter): boolean {
     if (f === 'WATCHING')  return item.entry.status === 'WATCHING' || item.entry.status === 'REWATCHING';
+    if (f === 'CATCH_UP')  return (item.entry.status === 'WATCHING' || item.entry.status === 'REWATCHING') && (catchUpEpisodeDetails.get(item.media.id)?.count ?? 0) > 0;
     if (f === 'AIRING')    return item.media.status === 'RELEASING';
     if (f === 'PLANNED')   return item.entry.status === 'PLAN_TO_WATCH';
     if (f === 'COMPLETED') return item.entry.status === 'COMPLETED';
@@ -126,8 +131,13 @@
       : allItems;
   });
 
+  const catchUpEpisodeDetails = $derived(catchUpDetails(appData.episodes));
+
   const items = $derived.by<LibraryItem[]>(() => {
     let list = searchedItems;
+    if (activeFilters.length === 1 && activeFilters[0] === 'CATCH_UP') {
+      return selectCatchUpItems(list, catchUpEpisodeDetails, catchUpSort);
+    }
     if (activeFilters.length) list = list.filter(x => activeFilters.some(f => matchesFilter(x, f)));
     switch (sortBy) {
       case 'name_asc':  list = [...list].sort((a, b) => getTitle(a.media, appData.settings.titleLanguage).localeCompare(getTitle(b.media, appData.settings.titleLanguage))); break;
@@ -213,19 +223,9 @@
   const showTba = $derived(appData.settings.showTba ?? true);
 
   const filterCounts = $derived.by(() => {
-    const counts = {} as Record<CollectionFilter, number>;
-    for (const f of appData.settings.filterOrder) {
+    const counts = {} as Record<WatchlistFilter, number>;
+    for (const f of WATCHLIST_FILTERS) {
       counts[f] = allItems.filter(x => matchesFilter(x, f)).length;
-    }
-    return counts;
-  });
-
-  const unwatchedAired = $derived.by(() => {
-    const counts = new Map<number, number>();
-    for (const ep of appData.episodes) {
-      if (ep.aired && !ep.watched && !ep.skipped) {
-        counts.set(ep.mediaId, (counts.get(ep.mediaId) ?? 0) + 1);
-      }
     }
     return counts;
   });
@@ -270,7 +270,7 @@
     if (!belongsToView) expandedId = null;
   });
 
-  function selectWatchlistFilter(f: CollectionFilter) {
+  function selectWatchlistFilter(f: WatchlistFilter) {
     activeFilters = [f];
   }
 
@@ -433,6 +433,22 @@
       </label>
 
       <div class="ml-auto flex items-center gap-2">
+        {#if activeFilters.length === 1 && activeFilters[0] === 'CATCH_UP'}
+          <label class="relative">
+            <span class="sr-only">Sort catch-up shows</span>
+            <select
+              class="appearance-none rounded-md border border-border bg-surface-2/50 py-2 pl-3 pr-8 text-sm text-zinc-300 outline-none [color-scheme:dark] transition-colors hover:border-zinc-500 focus:border-zinc-500"
+              bind:value={catchUpSort}
+            >
+              <option value="backlog">Largest backlog</option>
+              <option value="oldest">Oldest unwatched</option>
+              <option value="newest">Most recently aired</option>
+            </select>
+            <svg class="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="m6 9 6 6 6-6" />
+            </svg>
+          </label>
+        {/if}
         {#if fs.status === 'ready'}
           <button
             class="flex items-center gap-2 rounded-md border border-border bg-surface-2/50 px-3 py-2 text-sm text-zinc-400 transition-colors hover:border-zinc-500 hover:text-zinc-200 disabled:opacity-50"
@@ -498,7 +514,7 @@
 
         <!-- Airing / Upcoming banner -->
         {#if media.status === 'RELEASING'}
-          {@const behind = unwatchedAired.get(media.id) ?? 0}
+          {@const behind = catchUpEpisodeDetails.get(media.id)?.count ?? 0}
           <div class="absolute top-0 left-0 right-0 flex flex-col">
             <div class="relative flex items-center justify-center gap-1.5 py-1 bg-cyan-900/70 backdrop-blur-sm text-cyan-300 text-[10px] uppercase tracking-widest font-semibold">
               <span class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span>Airing
@@ -554,7 +570,8 @@
     {@const watched = stats.done}
     {@const total = media.totalEpisodes ?? stats.count}
     {@const percent = progressPercent(watched, total)}
-    {@const unwatched = media.status === 'RELEASING' ? (unwatchedAired.get(media.id) ?? 0) : 0}
+    {@const unwatched = catchUpEpisodeDetails.get(media.id)?.count ?? 0}
+    {@const isCatchUp = activeFilters.length === 1 && activeFilters[0] === 'CATCH_UP'}
     {@const airsToday = media.status === 'RELEASING'
       && media.nextAiringAt != null
       && new Date(media.nextAiringAt).getDay() === todayIndex}
@@ -601,9 +618,12 @@
       <div class="flex min-h-24 flex-1 flex-col p-2">
         <h3 class="line-clamp-2 text-[11px] font-semibold leading-4 text-zinc-100">{getTitle(media, lang)}</h3>
         <div class="mt-auto pt-3">
+          {#if isCatchUp}
+            <p class="mb-1.5 text-[10px] font-semibold text-green-400">{unwatched} {unwatched === 1 ? 'episode' : 'episodes'} to watch</p>
+          {/if}
           <div class="mb-1.5 flex items-center justify-between text-[10px] text-zinc-400">
             <span>
-              {watched}/{total}{#if unwatched > 0}{' '}<span class="text-green-400">(+{unwatched})</span>{/if}
+              {watched}/{total}{#if !isCatchUp && media.status === 'RELEASING' && unwatched > 0}{' '}<span class="text-green-400">(+{unwatched})</span>{/if}
             </span>
             <span>{percent}%</span>
           </div>
@@ -733,7 +753,13 @@
 
         <section class="flex min-h-0 flex-1 flex-col gap-3 px-4 md:px-6 {activeFilters.length === 1 && activeFilters[0] === 'PLANNED' ? 'pt-5' : ''}">
           {#if items.length === 0}
-            <div class="rounded-md border border-dashed border-border py-16 text-center text-sm text-zinc-500">No titles match this filter.</div>
+            <div class="rounded-md border border-dashed border-border py-16 text-center text-sm text-zinc-500">
+              {activeFilters.length === 1 && activeFilters[0] === 'CATCH_UP'
+                ? searchText.trim() && filterCounts.CATCH_UP > 0
+                  ? 'No catch-up shows match your search.'
+                  : 'You’re all caught up.'
+                : 'No titles match this filter.'}
+            </div>
           {:else}
             <div class="min-h-0 flex-1 overflow-y-auto">
               <div class="grid grid-cols-[repeat(auto-fill,minmax(135px,1fr))] gap-3 pb-6">
