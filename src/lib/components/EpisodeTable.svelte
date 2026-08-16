@@ -40,7 +40,8 @@
     const schedule = ep.aired ? '' : 'opacity-60 border-dashed';
     if (ep.watched) return `bg-accent/20 border-accent/40 text-accent ${schedule}`;
     if (ep.skipped) return `bg-zinc-800/50 border-zinc-600 text-zinc-500 ${schedule}`;
-    return `border-zinc-700/50 hover:border-zinc-500 hover:bg-zinc-800/50 ${schedule}`;
+    if (!ep.aired) return 'border-dashed border-zinc-800 bg-black/20 hover:border-zinc-600 hover:bg-zinc-900/40';
+    return 'border-zinc-600/70 bg-zinc-900/60 hover:border-zinc-400 hover:bg-zinc-800/70';
   }
 
   const lang = $derived(appData.settings.titleLanguage);
@@ -100,12 +101,12 @@
               tabindex="0"
               onkeydown={e => e.key === 'Enter' && cycleEpisodeState(ep.id)}
             >
-              <span class="w-12 text-right shrink-0 font-mono text-xs text-zinc-500">
+              <span class="w-12 text-right shrink-0 font-mono text-xs {ep.aired ? 'text-zinc-500' : 'text-zinc-700'}">
                 {ep.seasonNumber !== null && ep.seasonNumber !== undefined && ep.sourceEpisodeNumber !== null && ep.sourceEpisodeNumber !== undefined
                   ? `S${ep.seasonNumber}E${ep.sourceEpisodeNumber}`
                   : ep.number}
               </span>
-              <span class="flex-1 truncate text-zinc-300 {ep.watched ? 'text-white' : ''}">
+              <span class="flex-1 truncate {ep.aired ? 'text-zinc-300' : 'text-zinc-500'} {ep.watched ? 'text-white' : ''}">
                 {ep.title ?? `Episode ${ep.number}`}
               </span>
               <div class="flex items-center gap-1 shrink-0">
@@ -114,6 +115,11 @@
                 {/if}
                 {#if ep.isRecap}
                   <span class="text-[10px] px-1 rounded bg-blue-500/20 text-blue-400 border border-blue-500/30 border-dashed">R</span>
+                {/if}
+                {#if !ep.aired}
+                  <span class="rounded border border-zinc-700 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-zinc-500">
+                    Upcoming
+                  </span>
                 {/if}
                 <span class="text-[10px] text-zinc-400 w-32 text-right mr-3">
                   {formatAirDate(ep.airingAt)}

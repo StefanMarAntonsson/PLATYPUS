@@ -19,8 +19,11 @@
     let extra = '';
     if (ep.isFiller) extra = 'border-orange-500/60 ';
     else if (ep.isRecap) extra = 'border-dashed border-blue-500/60 ';
-    else extra = 'border-zinc-700 ';
-    return base + schedule + extra + 'text-zinc-300 bg-zinc-900/50 hover:border-zinc-400 hover:bg-zinc-800';
+    else extra = ep.aired ? 'border-zinc-600 ' : 'border-zinc-800 ';
+    const appearance = ep.aired
+      ? 'text-zinc-200 bg-zinc-900/70 '
+      : 'text-zinc-500 bg-black/20 opacity-60 border-dashed ';
+    return base + extra + appearance + 'hover:border-zinc-400 hover:bg-zinc-800';
   }
 </script>
 
@@ -44,7 +47,7 @@
       <button
         class={btnClass(ep)}
         onclick={() => cycleEpisodeState(ep.id)}
-        title="Ep {ep.number}{ep.title ? `: ${ep.title}` : ''}{ep.isFiller ? ' [Filler]' : ''}{ep.isRecap ? ' [Recap]' : ''}"
+        title="Ep {ep.number}{ep.title ? `: ${ep.title}` : ''}{!ep.aired ? ' [Upcoming]' : ''}{ep.isFiller ? ' [Filler]' : ''}{ep.isRecap ? ' [Recap]' : ''}"
       >{ep.number}</button>
     {/each}
     {#if !episodes.length}
