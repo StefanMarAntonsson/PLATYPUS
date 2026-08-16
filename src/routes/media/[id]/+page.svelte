@@ -2,6 +2,7 @@
   import { page } from '$app/state';
   import { base } from '$app/paths';
   import { appData, createManualEpisode, getLibraryEntry, mediaWatchEvents, setEpisodeState, setMovieWatched, updateLibraryEntry, updateManualMedia } from '$lib/store.svelte.js';
+  import { getTitle, isManualMedia } from '$lib/utils.js';
 
   const id = $derived(Number(page.params.id));
   const media = $derived(appData.media.find((item) => item.id === id));
@@ -11,7 +12,8 @@
   const watched = $derived(events.some((event) => event.episodeId === null));
   const episodes = $derived(appData.episodes.filter((episode) => episode.mediaId === id));
   const completedEpisodes = $derived(episodes.filter((episode) => episode.watched || episode.skipped).length);
-  const isManual = $derived(media?.id < 0);
+  const isManual = $derived(media ? isManualMedia(media) : false);
+  const sourceLabel = $derived(isManual ? 'Local library' : (media?.providerLinks?.[0]?.connectionName ?? 'Synced library'));
   let editing = $state(false);
   let title = $state('');
   let year = $state('');
@@ -21,7 +23,7 @@
 
   function beginEdit() {
     if (!media) return;
-    title = media.titleEnglish ?? media.titleRomaji;
+    title = getTitle(media, appData.settings.titleLanguage);
     year = media.seasonYear?.toString() ?? '';
     totalEpisodes = media.totalEpisodes?.toString() ?? '';
     description = media.description ?? '';
@@ -50,8 +52,8 @@
     <div class="rounded-xl border border-border bg-surface p-5">
       <div class="flex items-start justify-between gap-4">
         <div>
-          <p class="text-xs font-medium uppercase tracking-wider text-accent">{isMovie ? 'Movie' : 'Series'} · Local library</p>
-          <h1 class="mt-1 text-2xl font-bold text-white">{media.titleEnglish ?? media.titleRomaji}</h1>
+          <p class="text-xs font-medium uppercase tracking-wider text-accent">{isMovie ? 'Movie' : 'Series'} · {sourceLabel}</p>
+          <h1 class="mt-1 text-2xl font-bold text-white">{getTitle(media, appData.settings.titleLanguage)}</h1>
           {#if media.seasonYear}<p class="mt-1 text-sm text-zinc-500">{media.seasonYear}</p>{/if}
         </div>
         {#if isMovie}
