@@ -45,6 +45,13 @@
               <p class="mt-0.5 break-words text-xs text-zinc-400">{n.message}</p>
             {/if}
           </div>
+          {#if n.action}
+            {@const action = n.action}
+            <button
+              class="shrink-0 rounded px-2 py-1 text-xs font-semibold text-accent transition-colors hover:bg-accent/10"
+              onclick={() => { action.run(); dismiss(n.id); }}
+            >{action.label}</button>
+          {/if}
           <button
             class="-mr-1 -mt-1 shrink-0 rounded p-1 text-zinc-500 transition-colors hover:text-zinc-200"
             title="Dismiss"

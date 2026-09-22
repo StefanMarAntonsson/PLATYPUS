@@ -7,6 +7,7 @@ import type {
   TitleLanguage,
   WatchSite,
   ExternalLink,
+  Episode,
 } from "./types.js";
 
 export function getTitle(media: Media, lang: TitleLanguage): string {
@@ -160,6 +161,27 @@ export function findStreamingLink(links: ExternalLink[], preferred: WatchSite): 
     if (match) return match.url;
   }
   return streaming[0].url;
+}
+
+/** "S2E5" when the source numbers episodes by season, otherwise "Episode 17". */
+export function episodeLabel(
+  episode: Pick<Episode, "number" | "seasonNumber" | "sourceEpisodeNumber">,
+): string {
+  return episode.seasonNumber != null && episode.sourceEpisodeNumber != null
+    ? `S${episode.seasonNumber}E${episode.sourceEpisodeNumber}`
+    : `Episode ${episode.number}`;
+}
+
+/** Whether a key event comes from a field where the user is typing text. */
+export function isTypingTarget(target: EventTarget | null): boolean {
+  return (
+    typeof HTMLElement !== "undefined" &&
+    target instanceof HTMLElement &&
+    (target.isContentEditable ||
+      target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLSelectElement)
+  );
 }
 
 export function progressPercent(watched: number, total: number): number {

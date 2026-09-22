@@ -2,9 +2,10 @@
   import { untrack } from 'svelte';
   import { fade, fly } from 'svelte/transition';
   import { base } from '$app/paths';
-  import type { CollectionFilter, SortOption, Media, LibraryEntry } from '$lib/types.js';
-  import { appData, fs, mediaWatchEvents, removeFromLibrary, setMovieWatched, updateSettings } from '$lib/store.svelte.js';
-  import { getTitle, formatLabel, seasonLabel, progressPercent, findStreamingLink, streamingIconUrl, streamingSiteFromUrl, formatAirDate, formatCountdown, isOnBreak, timeAgo } from '$lib/utils.js';
+  import type { CollectionFilter, SortOption, Media, LibraryEntry, Episode } from '$lib/types.js';
+  import { appData, fs, markNextEpisodeWatched, mediaWatchEvents, removeFromLibrary, setEpisodeState, setMovieWatched, updateSettings } from '$lib/store.svelte.js';
+  import { getTitle, formatLabel, seasonLabel, progressPercent, findStreamingLink, streamingIconUrl, streamingSiteFromUrl, formatAirDate, formatCountdown, isOnBreak, timeAgo, episodeLabel, isTypingTarget } from '$lib/utils.js';
+  import { notify } from '$lib/notifications.svelte.js';
   import { canSyncMedia, syncMedia, syncAiringLibrary } from '$lib/api/sync.js';
   import EpisodeTable from '$lib/components/EpisodeTable.svelte';
   import ProgressBar from '$lib/components/ProgressBar.svelte';
@@ -237,12 +238,13 @@
   // Per-media episode tallies computed in a single pass, so each card is O(1)
   // instead of filtering the whole episode list (which lagged with a big library).
   const mediaStats = $derived.by(() => {
-    const stats = new Map<number, { done: number; count: number; aired: number }>();
+    const stats = new Map<number, { done: number; count: number; aired: number; next: Episode | undefined }>();
     for (const ep of appData.episodes) {
-      const s = stats.get(ep.mediaId) ?? { done: 0, count: 0, aired: 0 };
+      const s = stats.get(ep.mediaId) ?? { done: 0, count: 0, aired: 0, next: undefined };
       s.count++;
       if (ep.aired) s.aired++;
       if (ep.watched || ep.skipped) s.done++;
+      else if (ep.aired && (!s.next || ep.number < s.next.number)) s.next = ep;
       stats.set(ep.mediaId, s);
     }
     return stats;
@@ -253,6 +255,7 @@
   const expandedEps = $derived(expandedId !== null ? appData.episodes.filter(e => e.mediaId === expandedId) : []);
   const expandedWatched = $derived(expandedEps.filter(e => e.watched || e.skipped).length);
   const expandedAired = $derived(expandedEps.filter(e => e.aired).length);
+  const expandedNext = $derived(expandedId !== null ? mediaStats.get(expandedId)?.next : undefined);
   const expandedTotal = $derived(expandedItem ? (expandedItem.media.totalEpisodes ?? null) : null);
   const expandedIsMovie = $derived(
     expandedItem
@@ -273,6 +276,46 @@
     const belongsToView = entry
       && (isWatchlist ? entry.status !== 'COMPLETED' : entry.status === 'COMPLETED');
     if (!belongsToView) expandedId = null;
+  });
+
+  /** Run `action` for Enter/Space on the element itself, not on a nested control. */
+  function activateOnKey(event: KeyboardEvent, action: () => void) {
+    if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return;
+    event.preventDefault();
+    action();
+  }
+
+  function watchNext(mediaId: number) {
+    const media = mediaById.get(mediaId);
+    if (!media) return;
+    const episode = markNextEpisodeWatched(mediaId);
+    if (!episode) {
+      notify('info', 'All caught up', getTitle(media, lang));
+      return;
+    }
+    notify('success', `Watched ${episodeLabel(episode)}`, getTitle(media, lang), {
+      label: 'Undo',
+      run: () => setEpisodeState(episode.id, 'unwatched'),
+    });
+  }
+
+  // "+" marks the next episode of the open sidebar's title, or of the
+  // focused card, as watched.
+  $effect(() => {
+    if (!isWatchlist) return;
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.key !== '+' && event.key !== '=') || event.ctrlKey || event.metaKey || event.altKey) return;
+      if (isTypingTarget(event.target)) return;
+      const focused = document.activeElement instanceof HTMLElement
+        ? document.activeElement.closest<HTMLElement>('[data-media-id]')
+        : null;
+      const mediaId = expandedId ?? (focused ? Number(focused.dataset.mediaId) : null);
+      if (mediaId === null) return;
+      event.preventDefault();
+      watchNext(mediaId);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   });
 
   function selectWatchlistFilter(f: WatchlistFilter) {
@@ -502,7 +545,7 @@
       role="button"
       tabindex="0"
       onclick={() => toggleExpand(media.id)}
-      onkeydown={e => (e.key === 'Enter' || e.key === ' ') && toggleExpand(media.id)}
+      onkeydown={e => activateOnKey(e, () => toggleExpand(media.id))}
     >
       <!-- Image section -->
       <div class="aspect-[2/3] relative overflow-hidden bg-zinc-800">
@@ -571,7 +614,7 @@
   {/snippet}
 
   {#snippet watchlistCard(media: Media, entry: LibraryEntry)}
-    {@const stats = mediaStats.get(media.id) ?? { done: 0, count: 0, aired: 0 }}
+    {@const stats = mediaStats.get(media.id) ?? { done: 0, count: 0, aired: 0, next: undefined }}
     {@const watched = stats.done}
     {@const total = media.totalEpisodes ?? stats.count}
     {@const percent = progressPercent(watched, total)}
@@ -597,8 +640,9 @@
           : 'border-border hover:border-zinc-500'}"
       role="button"
       tabindex="0"
+      data-media-id={media.id}
       onclick={() => toggleExpand(media.id)}
-      onkeydown={event => (event.key === 'Enter' || event.key === ' ') && toggleExpand(media.id)}
+      onkeydown={event => activateOnKey(event, () => toggleExpand(media.id))}
     >
       <div class="relative aspect-[4/5] overflow-hidden bg-zinc-900">
         {#if media.coverImageLarge}
@@ -619,6 +663,44 @@
              badge === 'DROPPED' ? 'bg-red-800/90 text-red-100' :
              'bg-accent/90 text-white'}">{badge === 'AIRING' ? `• ${badge}` : badge}</span>
         {/if}
+        {#if streamingUrl}
+          <div class="pointer-events-none absolute inset-0 z-20 flex flex-col opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
+            <a
+              href={streamingUrl}
+              target="_blank"
+              rel="noopener"
+              class="flex min-h-0 flex-1 items-center justify-center bg-zinc-950/85 text-zinc-200 transition-colors hover:bg-accent/80 hover:text-white focus-visible:bg-accent/80 focus-visible:text-white focus-visible:outline-none"
+              aria-label="Watch {getTitle(media, lang)} and open its sidebar"
+              title="Watch now"
+              onclick={event => {
+                expandedId = media.id;
+                newestFirst = true;
+                handleExternalLink(event, streamingUrl, true);
+              }}
+            >
+              {#if streamingIcon}
+                <img src={streamingIcon} alt="" class="h-12 w-12 object-contain" aria-hidden="true" />
+              {:else}
+                <span class="text-xs font-bold uppercase tracking-wider">{streamingSite ?? 'Watch'}</span>
+              {/if}
+            </a>
+            <button
+              type="button"
+              class="flex min-h-0 flex-1 items-center justify-center border-t border-border bg-surface-2/90 text-zinc-300 transition-colors hover:bg-zinc-800/80 hover:text-white focus-visible:bg-zinc-800/80 focus-visible:text-white focus-visible:outline-none"
+              aria-label="Open sidebar for {getTitle(media, lang)}"
+              title="Open sidebar"
+              onclick={event => {
+                event.stopPropagation();
+                expandedId = media.id;
+                newestFirst = true;
+              }}
+            >
+              <svg class="h-7 w-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01" />
+              </svg>
+            </button>
+          </div>
+        {/if}
       </div>
       <div class="flex min-h-24 flex-1 flex-col p-2">
         <h3 class="line-clamp-2 text-[11px] font-semibold leading-4 text-zinc-100">{getTitle(media, lang)}</h3>
@@ -630,51 +712,24 @@
             <span>
               {watched}/{total}{#if !isCatchUp && media.status === 'RELEASING' && unwatched > 0}{' '}<span class="text-green-400">(+{unwatched})</span>{/if}
             </span>
-            <span>{percent}%</span>
+            <span class="flex items-center gap-1.5">
+              {percent}%
+              {#if stats.next}
+                <button
+                  type="button"
+                  class="rounded border border-accent/40 bg-accent/10 px-1.5 py-px text-[10px] font-bold text-accent transition-colors hover:bg-accent hover:text-white focus-visible:bg-accent focus-visible:text-white focus-visible:outline-none"
+                  title="Mark {episodeLabel(stats.next)} watched (+)"
+                  aria-label="Mark {episodeLabel(stats.next)} of {getTitle(media, lang)} watched"
+                  onclick={event => { event.stopPropagation(); watchNext(media.id); }}
+                >+1</button>
+              {/if}
+            </span>
           </div>
           <div class="h-1 overflow-hidden rounded-full bg-zinc-700/80">
             <div class="h-full rounded-full bg-accent" style={`width:${percent}%`}></div>
           </div>
         </div>
       </div>
-      {#if streamingUrl}
-        <div class="pointer-events-none absolute inset-0 z-20 flex flex-col opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
-          <a
-            href={streamingUrl}
-            target="_blank"
-            rel="noopener"
-            class="flex min-h-0 flex-1 items-center justify-center bg-zinc-950/85 text-zinc-200 transition-colors hover:bg-accent/80 hover:text-white focus-visible:bg-accent/80 focus-visible:text-white focus-visible:outline-none"
-            aria-label="Watch {getTitle(media, lang)} and open its sidebar"
-            title="Watch now"
-            onclick={event => {
-              expandedId = media.id;
-              newestFirst = true;
-              handleExternalLink(event, streamingUrl, true);
-            }}
-          >
-            {#if streamingIcon}
-              <img src={streamingIcon} alt="" class="h-12 w-12 object-contain" aria-hidden="true" />
-            {:else}
-              <span class="text-xs font-bold uppercase tracking-wider">{streamingSite ?? 'Watch'}</span>
-            {/if}
-          </a>
-          <button
-            type="button"
-            class="flex min-h-0 flex-1 items-center justify-center border-t border-border bg-surface-2/90 text-zinc-300 transition-colors hover:bg-zinc-800/80 hover:text-white focus-visible:bg-zinc-800/80 focus-visible:text-white focus-visible:outline-none"
-            aria-label="Open sidebar for {getTitle(media, lang)}"
-            title="Open sidebar"
-            onclick={event => {
-              event.stopPropagation();
-              expandedId = media.id;
-              newestFirst = true;
-            }}
-          >
-            <svg class="h-7 w-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01" />
-            </svg>
-          </button>
-        </div>
-      {/if}
     </div>
   {/snippet}
 
@@ -853,6 +908,13 @@
               onclick={() => handleSync(m.id)}
               disabled={syncing !== null}
             ><span class="{syncing === m.id ? 'animate-spin' : ''}">↻</span> Sync</button>
+          {/if}
+          {#if !expandedIsMovie && expandedNext}
+            <button
+              class="text-xs px-3 py-1.5 rounded border border-accent/40 bg-accent/10 text-accent hover:bg-accent hover:text-white transition-colors"
+              title="Shortcut: +"
+              onclick={() => watchNext(m.id)}
+            >+1 {episodeLabel(expandedNext)}</button>
           {/if}
           {#if expandedIsMovie}
             <button

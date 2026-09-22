@@ -5,11 +5,12 @@ import {
   appData,
   attachSourceToMedia,
   autoUpdateLibraryStatus,
-  cycleEpisodeState,
   createManualMedia,
   createManualEpisode,
   createMediaFromSource,
   markAllWatched,
+  markNextEpisodeWatched,
+  nextEpisodeToWatch,
   skipAllEpisodes,
   clearAllWatched,
   setMovieWatched,
@@ -25,20 +26,22 @@ beforeEach(() => {
 });
 
 describe("episode state transitions", () => {
-  test("cycles unwatched to watched to skipped to unwatched", () => {
+  test("toggling watched never marks an episode skipped", () => {
     const episode = appData.episodes[1];
     const currentEpisode = () => appData.episodes.find((item) => item.id === episode.id);
     setEpisodeState(episode.id, "unwatched");
-    cycleEpisodeState(episode.id);
+    toggleEpisodeWatched(episode.id);
     expect(currentEpisode()).toMatchObject({
       watched: true,
       skipped: false,
       watchedAt: Date.now(),
     });
-    cycleEpisodeState(episode.id);
-    expect(currentEpisode()).toMatchObject({ watched: false, skipped: true, watchedAt: null });
-    cycleEpisodeState(episode.id);
+    toggleEpisodeWatched(episode.id);
     expect(currentEpisode()).toMatchObject({ watched: false, skipped: false, watchedAt: null });
+
+    setEpisodeState(episode.id, "skipped");
+    toggleEpisodeWatched(episode.id);
+    expect(currentEpisode()).toMatchObject({ watched: true, skipped: false });
   });
 
   test("allows an unaired episode to be flagged before a sync refresh", () => {
@@ -46,7 +49,7 @@ describe("episode state transitions", () => {
     episode.aired = false;
     setEpisodeState(episode.id, "unwatched");
 
-    cycleEpisodeState(episode.id);
+    toggleEpisodeWatched(episode.id);
 
     expect(appData.episodes.find((item) => item.id === episode.id)).toMatchObject({
       watched: true,
@@ -56,6 +59,25 @@ describe("episode state transitions", () => {
     expect(appData.watchEvents).toContainEqual(
       expect.objectContaining({ mediaId: episode.mediaId, episodeId: episode.id }),
     );
+  });
+
+  test("marks the earliest aired, unwatched, unskipped episode next", () => {
+    const mediaId = appData.episodes[0].mediaId;
+    clearAllWatched(mediaId);
+    const [first, second] = appData.episodes
+      .filter((episode) => episode.mediaId === mediaId)
+      .sort((a, b) => a.number - b.number);
+    setEpisodeState(first.id, "skipped");
+
+    expect(nextEpisodeToWatch(mediaId)?.id).toBe(second.id);
+    expect(markNextEpisodeWatched(mediaId)?.id).toBe(second.id);
+    expect(appData.episodes.find((episode) => episode.id === second.id)?.watched).toBe(true);
+  });
+
+  test("has no next episode once every aired episode is done", () => {
+    const mediaId = appData.episodes[0].mediaId;
+    markAllWatched(mediaId);
+    expect(markNextEpisodeWatched(mediaId)).toBeUndefined();
   });
 
   test("toggles watched state from the current store record after an episode is replaced", () => {

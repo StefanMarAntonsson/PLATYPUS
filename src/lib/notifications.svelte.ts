@@ -4,11 +4,17 @@
 
 export type NotificationKind = "info" | "success" | "warning" | "error";
 
+export interface NotificationAction {
+  label: string;
+  run: () => void;
+}
+
 export interface Notification {
   id: number;
   kind: NotificationKind;
   title: string;
   message?: string;
+  action?: NotificationAction;
   createdAt: number;
 }
 
@@ -24,9 +30,14 @@ function autoDismisses(kind: NotificationKind): boolean {
   return kind === "success" || kind === "info";
 }
 
-export function notify(kind: NotificationKind, title: string, message?: string): number {
+export function notify(
+  kind: NotificationKind,
+  title: string,
+  message?: string,
+  action?: NotificationAction,
+): number {
   const id = _nextId++;
-  notifications.push({ id, kind, title, message, createdAt: Date.now() });
+  notifications.push({ id, kind, title, message, action, createdAt: Date.now() });
   if (autoDismisses(kind)) resumeAutoDismiss(id);
   return id;
 }

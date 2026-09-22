@@ -679,12 +679,23 @@ export function setEpisodeState(episodeId: number, state: "unwatched" | "watched
   persist({ episodes: [episodeId], watchEvents: changedEvents });
 }
 
-export function cycleEpisodeState(episodeId: number) {
-  const ep = appData.episodes.find((e) => e.id === episodeId);
-  if (!ep) return;
-  if (!ep.watched && !ep.skipped) setEpisodeState(episodeId, "watched");
-  else if (ep.watched) setEpisodeState(episodeId, "skipped");
-  else setEpisodeState(episodeId, "unwatched");
+/** The earliest aired episode of a title that is neither watched nor skipped. */
+export function nextEpisodeToWatch(mediaId: number): Episode | undefined {
+  let next: Episode | undefined;
+  for (const episode of appData.episodes) {
+    if (episode.mediaId !== mediaId || !episode.aired || episode.watched || episode.skipped) {
+      continue;
+    }
+    if (!next || episode.number < next.number) next = episode;
+  }
+  return next;
+}
+
+/** Mark the next episode watched and return it, or undefined when caught up. */
+export function markNextEpisodeWatched(mediaId: number): Episode | undefined {
+  const next = nextEpisodeToWatch(mediaId);
+  if (next) setEpisodeState(next.id, "watched");
+  return next;
 }
 
 export function toggleEpisodeWatched(episodeId: number) {
