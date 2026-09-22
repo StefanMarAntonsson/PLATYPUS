@@ -23,7 +23,7 @@
 
 {#if visible}
   <aside
-    class="fixed bottom-4 right-4 z-[85] w-[calc(100vw-2rem)] max-w-sm overflow-hidden rounded-lg border border-amber-700/50 bg-surface/95 shadow-2xl backdrop-blur"
+    class="fixed bottom-4 right-4 z-[85] w-[calc(100vw-2rem)] max-w-sm overflow-hidden rounded-lg border border-amber-700/50 bg-surface shadow-2xl"
     aria-live="polite"
     aria-label="Application update"
   >

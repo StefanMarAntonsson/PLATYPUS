@@ -99,7 +99,7 @@
 </script>
 
 <button
-  class="fixed inset-0 z-[80] cursor-default bg-black/70 backdrop-blur-sm"
+  class="fixed inset-0 z-[80] cursor-default bg-black/75"
   aria-label="Close add media dialog"
   onclick={onclose}
 ></button>

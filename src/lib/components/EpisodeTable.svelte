@@ -18,18 +18,25 @@
   }
   let { mediaList, newestFirst = false, limitLongShows = false, onContextMenu }: Props = $props();
 
-  function episodesFor(mediaId: number): Episode[] {
-    let eps = appData.episodes.filter(e => e.mediaId === mediaId).sort((a, b) => a.number - b.number);
-    if (limitLongShows && eps.length > 100) eps = eps.slice(-50);
-    return newestFirst ? eps.reverse() : eps;
-  }
+  // One pass over the library's episodes per render, grouped by title.
+  const groups = $derived.by(() => {
+    const ids = new Set(mediaList.map(media => media.id));
+    const byMedia = new Map<number, Episode[]>();
+    for (const episode of appData.episodes) {
+      if (!ids.has(episode.mediaId)) continue;
+      const list = byMedia.get(episode.mediaId);
+      if (list) list.push(episode);
+      else byMedia.set(episode.mediaId, [episode]);
+    }
+    return new Map([...ids].map(id => {
+      const all = (byMedia.get(id) ?? []).sort((a, b) => a.number - b.number);
+      let eps = limitLongShows && all.length > 100 ? all.slice(-50) : all;
+      if (newestFirst) eps = [...eps].reverse();
+      return [id, { eps, total: all.length, batch: batchStatus(all) }];
+    }));
+  });
 
-  function episodeCount(mediaId: number): number {
-    return appData.episodes.filter(e => e.mediaId === mediaId).length;
-  }
-
-  function batchStatus(mediaId: number): 'all-watched' | 'all-skipped' | 'mixed' | 'none' {
-    const episodes = appData.episodes.filter(e => e.mediaId === mediaId);
+  function batchStatus(episodes: Episode[]): 'all-watched' | 'all-skipped' | 'mixed' | 'none' {
     if (!episodes.length) return 'none';
     if (episodes.every(e => e.watched)) return 'all-watched';
     if (episodes.every(e => e.skipped)) return 'all-skipped';
@@ -49,9 +56,10 @@
 
 <div class="space-y-6">
   {#each mediaList as media (media.id)}
-    {@const eps = episodesFor(media.id)}
-    {@const totalEpisodeCount = episodeCount(media.id)}
-    {@const batch = batchStatus(media.id)}
+    {@const group = groups.get(media.id)}
+    {@const eps = group?.eps ?? []}
+    {@const totalEpisodeCount = group?.total ?? 0}
+    {@const batch = group?.batch ?? 'none'}
     <div>
       <!-- Group header -->
       <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->

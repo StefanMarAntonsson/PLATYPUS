@@ -129,8 +129,19 @@ export async function initFile(): Promise<void> {
 
 // ─── ID helper ────────────────────────────────────────────────────────────────
 
+// Loops instead of Math.max(...array): spreading a very large array into call
+// arguments is slow and can overflow the engine's argument limit.
+function maxOf<T>(arr: T[], value: (item: T) => number, initial: number): number {
+  let max = initial;
+  for (const item of arr) {
+    const v = value(item);
+    if (v > max) max = v;
+  }
+  return max;
+}
+
 function nextId<T extends { id: number }>(arr: T[]): number {
-  return arr.length > 0 ? Math.max(...arr.map((x) => x.id)) + 1 : 1;
+  return maxOf(arr, (x) => x.id, 0) + 1;
 }
 
 // Provider records from the legacy application use positive provider IDs. Keep
@@ -138,8 +149,7 @@ function nextId<T extends { id: number }>(arr: T[]): number {
 // migration lands, so adding an item manually can never overwrite a later
 // imported provider record with the same number.
 function nextLocalId<T extends { id: number }>(arr: T[]): number {
-  const localIds = arr.map((item) => item.id).filter((id) => id < 0);
-  return localIds.length > 0 ? Math.min(...localIds) - 1 : -1;
+  return -maxOf(arr, (item) => -item.id, 0) - 1;
 }
 
 // ─── Media ────────────────────────────────────────────────────────────────────
@@ -344,7 +354,7 @@ export function createManualEpisode(mediaId: number, title?: string): Episode | 
   const episode: Episode = {
     id: nextLocalId(appData.episodes),
     mediaId,
-    number: existing.length > 0 ? Math.max(...existing.map((item) => item.number)) + 1 : 1,
+    number: maxOf(existing, (item) => item.number, 0) + 1,
     title: title?.trim() || null,
     airingAt: null,
     aired: true,
@@ -397,65 +407,111 @@ export function setMovieWatched(mediaId: number, watched: boolean) {
 
 // ─── Episodes ─────────────────────────────────────────────────────────────────
 
+type ProviderLink = NonNullable<Episode["providerLinks"]>[number];
+
+const numberKey = (episode: Pick<Episode, "mediaId" | "number">) =>
+  `${episode.mediaId}:${episode.number}`;
+const providerKey = (link: ProviderLink) => `${link.connectionId}\u0000${link.providerId}`;
+
+function sharesProviderLink(a: Episode, b: Episode): boolean {
+  return !!a.providerLinks?.some((incomingLink) =>
+    b.providerLinks?.some(
+      (existingLink) =>
+        existingLink.connectionId === incomingLink.connectionId &&
+        existingLink.providerId === incomingLink.providerId,
+    ),
+  );
+}
+
+/**
+ * Merge synced episodes into the library. Episodes match an existing record by
+ * ID, by media and episode number, or by a shared provider identity; several
+ * matches are collapsed into one record that keeps the user's watch state.
+ */
 export function upsertEpisodes(incoming: Episode[]) {
+  if (incoming.length === 0) return;
+
+  // Work on plain records with lookup tables built once. Searching the
+  // reactive array for every incoming episode made each sync O(stored × new).
+  const slots: Array<Episode | null> = $state.snapshot(appData.episodes) as Episode[];
+  const byId = new Map<number, number>();
+  const byNumber = new Map<string, Set<number>>();
+  const byProvider = new Map<string, Set<number>>();
+  const addToIndex = (map: Map<string, Set<number>>, key: string, index: number) => {
+    const indexes = map.get(key);
+    if (indexes) indexes.add(index);
+    else map.set(key, new Set([index]));
+  };
+  const index = (episode: Episode, slot: number) => {
+    byId.set(episode.id, slot);
+    addToIndex(byNumber, numberKey(episode), slot);
+    for (const link of episode.providerLinks ?? []) addToIndex(byProvider, providerKey(link), slot);
+  };
+  slots.forEach((episode, slot) => episode && index(episode, slot));
+
   for (const ep of incoming) {
-    const matchingIndexes = appData.episodes.flatMap((existing, index) =>
-      existing.id === ep.id ||
-      (existing.mediaId === ep.mediaId && existing.number === ep.number) ||
-      ep.providerLinks?.some((incomingLink) =>
-        existing.providerLinks?.some(
-          (existingLink) =>
-            existingLink.connectionId === incomingLink.connectionId &&
-            existingLink.providerId === incomingLink.providerId,
-        ),
-      )
-        ? [index]
-        : [],
-    );
+    // Index entries can go stale as records are replaced, so every candidate
+    // is re-checked against the record currently in its slot.
+    const candidates = new Set<number>();
+    const idSlot = byId.get(ep.id);
+    if (idSlot !== undefined) candidates.add(idSlot);
+    for (const slot of byNumber.get(numberKey(ep)) ?? []) candidates.add(slot);
+    for (const link of ep.providerLinks ?? []) {
+      for (const slot of byProvider.get(providerKey(link)) ?? []) candidates.add(slot);
+    }
+    const matchingIndexes = [...candidates]
+      .filter((slot) => {
+        const existing = slots[slot];
+        return (
+          !!existing &&
+          (existing.id === ep.id ||
+            (existing.mediaId === ep.mediaId && existing.number === ep.number) ||
+            sharesProviderLink(ep, existing))
+        );
+      })
+      .sort((a, b) => a - b);
 
-    if (matchingIndexes.length > 0) {
-      const matches = matchingIndexes.map((index) => appData.episodes[index]);
-      const watchedMatch = matches.find((episode) => episode.watched);
-      const skippedMatch = matches.find((episode) => episode.skipped);
-      const identityMatch = matches.find((episode) =>
-        ep.providerLinks?.some((incomingLink) =>
-          episode.providerLinks?.some(
-            (existingLink) =>
-              existingLink.connectionId === incomingLink.connectionId &&
-              existingLink.providerId === incomingLink.providerId,
-          ),
-        ),
-      );
-      const canonical = watchedMatch ?? skippedMatch ?? identityMatch ?? matches[0];
-      const canonicalIndex = appData.episodes.indexOf(canonical);
-      const watched = !!watchedMatch;
-      appData.episodes[canonicalIndex] = {
-        ...ep,
-        id: canonical.id,
-        title: ep.title ?? matches.find((episode) => episode.title)?.title ?? null,
-        thumbnail: ep.thumbnail ?? matches.find((episode) => episode.thumbnail)?.thumbnail ?? null,
-        watched,
-        skipped: !watched && !!skippedMatch,
-        watchedAt: watched ? (watchedMatch?.watchedAt ?? Date.now()) : null,
-      };
+    if (matchingIndexes.length === 0) {
+      slots.push(ep);
+      index(ep, slots.length - 1);
+      continue;
+    }
 
-      const duplicateIds = new Set(
-        matches.filter((episode) => episode.id !== canonical.id).map((episode) => episode.id),
-      );
-      if (duplicateIds.size > 0) {
-        for (const event of appData.watchEvents) {
-          if (event.episodeId !== null && duplicateIds.has(event.episodeId)) {
-            event.episodeId = canonical.id;
-          }
-        }
-        for (const index of matchingIndexes.sort((a, b) => b - a)) {
-          if (index !== canonicalIndex) appData.episodes.splice(index, 1);
+    const matches = matchingIndexes.map((slot) => slots[slot] as Episode);
+    const watchedMatch = matches.find((episode) => episode.watched);
+    const skippedMatch = matches.find((episode) => episode.skipped);
+    const identityMatch = matches.find((episode) => sharesProviderLink(ep, episode));
+    const canonical = watchedMatch ?? skippedMatch ?? identityMatch ?? matches[0];
+    const canonicalIndex = matchingIndexes[matches.indexOf(canonical)];
+    const watched = !!watchedMatch;
+    const merged: Episode = {
+      ...ep,
+      id: canonical.id,
+      title: ep.title ?? matches.find((episode) => episode.title)?.title ?? null,
+      thumbnail: ep.thumbnail ?? matches.find((episode) => episode.thumbnail)?.thumbnail ?? null,
+      watched,
+      skipped: !watched && !!skippedMatch,
+      watchedAt: watched ? (watchedMatch?.watchedAt ?? Date.now()) : null,
+    };
+    slots[canonicalIndex] = merged;
+    index(merged, canonicalIndex);
+
+    const duplicateIds = new Set<number>();
+    for (const [position, slot] of matchingIndexes.entries()) {
+      if (slot === canonicalIndex) continue;
+      duplicateIds.add(matches[position].id);
+      slots[slot] = null;
+    }
+    if (duplicateIds.size > 0) {
+      for (const event of appData.watchEvents) {
+        if (event.episodeId !== null && duplicateIds.has(event.episodeId)) {
+          event.episodeId = canonical.id;
         }
       }
-    } else {
-      appData.episodes.push(ep);
     }
   }
+
+  appData.episodes = slots.filter((episode): episode is Episode => episode !== null);
   persist();
 }
 
@@ -541,13 +597,15 @@ export function toggleEpisodeSkipped(episodeId: number) {
 
 export function markAllWatched(mediaId: number) {
   const watchedAt = Date.now();
+  const episodesWithEvents = new Set(appData.watchEvents.map((event) => event.episodeId));
+  let eventId = nextId(appData.watchEvents);
   for (const ep of appData.episodes.filter((e) => e.mediaId === mediaId)) {
     ep.watched = true;
     ep.skipped = false;
     ep.watchedAt = ep.watchedAt ?? watchedAt;
-    if (!appData.watchEvents.some((event) => event.episodeId === ep.id)) {
+    if (!episodesWithEvents.has(ep.id)) {
       appData.watchEvents.push({
-        id: nextId(appData.watchEvents),
+        id: eventId++,
         mediaId,
         episodeId: ep.id,
         watchedAt: ep.watchedAt,
@@ -671,9 +729,10 @@ export function addMediaToCollection(collectionId: number, mediaId: number) {
     appData.collectionEntries.find((e) => e.collectionId === collectionId && e.mediaId === mediaId)
   )
     return;
-  const maxOrder = Math.max(
+  const maxOrder = maxOf(
+    appData.collectionEntries.filter((e) => e.collectionId === collectionId),
+    (e) => e.order,
     0,
-    ...appData.collectionEntries.filter((e) => e.collectionId === collectionId).map((e) => e.order),
   );
   appData.collectionEntries.push({ collectionId, mediaId, order: maxOrder + 1 });
   persist();
@@ -730,9 +789,10 @@ export function deleteSeries(id: number) {
 
 export function addMediaToSeries(seriesId: number, mediaId: number) {
   if (appData.seriesEntries.find((e) => e.seriesId === seriesId && e.mediaId === mediaId)) return;
-  const maxOrder = Math.max(
+  const maxOrder = maxOf(
+    appData.seriesEntries.filter((e) => e.seriesId === seriesId),
+    (e) => e.order,
     0,
-    ...appData.seriesEntries.filter((e) => e.seriesId === seriesId).map((e) => e.order),
   );
   appData.seriesEntries.push({ seriesId, mediaId, order: maxOrder + 1 });
   persist();

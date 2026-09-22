@@ -77,9 +77,9 @@ export function airWeekday(ts: number | null): string {
   return new Date(ts).toLocaleDateString("en-US", { weekday: "long" });
 }
 
-export function formatRelativeTime(ts: number | null): string {
+export function formatRelativeTime(ts: number | null, now = Date.now()): string {
   if (!ts) return "";
-  const diff = ts - Date.now();
+  const diff = ts - now;
   const abs = Math.abs(diff);
   if (abs < 60_000) return "just now";
   if (abs < 3_600_000) return `${Math.round(abs / 60_000)}m`;
@@ -91,13 +91,13 @@ const WEEK_MS = 7 * 86_400_000;
 
 // Countdown to a future airing time, e.g. "in 3h", "today 20:00", "in 12d".
 // Past/imminent times read "airing now".
-export function formatCountdown(ts: number | null): string {
+export function formatCountdown(ts: number | null, now = Date.now()): string {
   if (!ts) return "";
-  const diff = ts - Date.now();
+  const diff = ts - now;
   if (diff <= 0) return "airing now";
   if (diff < 3_600_000) return `in ${Math.max(1, Math.round(diff / 60_000))}m`;
   if (diff < 86_400_000) {
-    const isToday = new Date(ts).toDateString() === new Date().toDateString();
+    const isToday = new Date(ts).toDateString() === new Date(now).toDateString();
     if (isToday) {
       const clock = new Date(ts).toLocaleTimeString("en-US", {
         hour: "2-digit",
@@ -111,8 +111,8 @@ export function formatCountdown(ts: number | null): string {
 }
 
 // A show is "on a break" when its next episode is more than a week away.
-export function isOnBreak(ts: number | null): boolean {
-  return ts != null && ts - Date.now() > WEEK_MS;
+export function isOnBreak(ts: number | null, now = Date.now()): boolean {
+  return ts != null && ts - now > WEEK_MS;
 }
 
 type StreamingSite = Exclude<WatchSite, "any">;
@@ -167,8 +167,8 @@ export function progressPercent(watched: number, total: number): number {
   return Math.floor((watched / total) * 100);
 }
 
-export function timeAgo(ts: number): string {
-  const diff = Date.now() - ts;
+export function timeAgo(ts: number, now = Date.now()): string {
+  const diff = now - ts;
   if (diff < 60_000) return "just now";
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;

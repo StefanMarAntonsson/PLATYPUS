@@ -169,11 +169,11 @@
 
             <div class="absolute top-2 left-2 flex flex-col gap-1">
               {#if col.isAiring}
-                <span class="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-purple-900/80 text-purple-300 backdrop-blur-sm">
+                <span class="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-purple-900/90 text-purple-300">
                   <span class="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse"></span>Airing
                 </span>
               {:else if col.isUpcoming}
-                <span class="text-[10px] px-1.5 py-0.5 rounded bg-orange-900/80 text-orange-300 backdrop-blur-sm">Upcoming</span>
+                <span class="text-[10px] px-1.5 py-0.5 rounded bg-orange-900/90 text-orange-300">Upcoming</span>
               {/if}
             </div>
 

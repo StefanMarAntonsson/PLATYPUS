@@ -12,6 +12,7 @@
   import CollectionSuggestDialog from '$lib/components/CollectionSuggestDialog.svelte';
   import { openExternalUrl } from '$lib/external-links.js';
   import { virtualGridWindow } from '$lib/virtual-grid.js';
+  import { clock } from '$lib/clock.svelte.js';
   import { catchUpDetails, filterLibraryItemsForView, selectCatchUpItems, type CatchUpSort } from '$lib/library-view.js';
 
   interface Props {
@@ -109,9 +110,11 @@
 
   interface LibraryItem { media: Media; entry: typeof appData.library[0] }
 
+  const mediaById = $derived(new Map(appData.media.map(m => [m.id, m])));
+
   const allItems = $derived.by<LibraryItem[]>(() =>
     filterLibraryItemsForView(appData.library
-      .map(entry => ({ entry, media: appData.media.find(m => m.id === entry.mediaId) }))
+      .map(entry => ({ entry, media: mediaById.get(entry.mediaId) }))
       .filter((x): x is LibraryItem => !!x.media), view)
   );
 
@@ -144,13 +147,14 @@
       case 'name_desc': list = [...list].sort((a, b) => getTitle(b.media, appData.settings.titleLanguage).localeCompare(getTitle(a.media, appData.settings.titleLanguage))); break;
       case 'status':    list = [...list].sort((a, b) => (STATUS_ORDER[a.entry.status] ?? 9) - (STATUS_ORDER[b.entry.status] ?? 9)); break;
       case 'progress': {
-        list = [...list].sort((a, b) => {
-          const aEps = appData.episodes.filter(e => e.mediaId === a.media.id);
-          const bEps = appData.episodes.filter(e => e.mediaId === b.media.id);
-          const aPct = progressPercent(aEps.filter(e => e.watched || e.skipped).length, aEps.filter(e => e.aired).length);
-          const bPct = progressPercent(bEps.filter(e => e.watched || e.skipped).length, bEps.filter(e => e.aired).length);
-          return bPct - aPct;
-        });
+        const percentOf = (item: LibraryItem) => {
+          const stats = mediaStats.get(item.media.id);
+          return stats ? progressPercent(stats.done, stats.aired) : 0;
+        };
+        list = list
+          .map(item => ({ item, percent: percentOf(item) }))
+          .sort((a, b) => b.percent - a.percent)
+          .map(({ item }) => item);
         break;
       }
       case 'airing_day': {
@@ -233,10 +237,11 @@
   // Per-media episode tallies computed in a single pass, so each card is O(1)
   // instead of filtering the whole episode list (which lagged with a big library).
   const mediaStats = $derived.by(() => {
-    const stats = new Map<number, { done: number; count: number }>();
+    const stats = new Map<number, { done: number; count: number; aired: number }>();
     for (const ep of appData.episodes) {
-      const s = stats.get(ep.mediaId) ?? { done: 0, count: 0 };
+      const s = stats.get(ep.mediaId) ?? { done: 0, count: 0, aired: 0 };
       s.count++;
+      if (ep.aired) s.aired++;
       if (ep.watched || ep.skipped) s.done++;
       stats.set(ep.mediaId, s);
     }
@@ -461,7 +466,7 @@
             {:else if bulkSyncing}
               Syncing…
             {:else if appData.settings.lastSyncedAt}
-              Synced {timeAgo(appData.settings.lastSyncedAt)}
+              Synced {timeAgo(appData.settings.lastSyncedAt, clock.now)}
             {:else}
               Sync airing
             {/if}
@@ -490,7 +495,7 @@
 
   <!-- Reusable library card -->
   {#snippet card(media: Media, entry: LibraryEntry)}
-    {@const onBreak = media.status === 'RELEASING' && isOnBreak(media.nextAiringAt)}
+    {@const onBreak = media.status === 'RELEASING' && isOnBreak(media.nextAiringAt, clock.now)}
     <div
       class="group relative rounded-xl overflow-hidden bg-surface-2 border transition-colors cursor-pointer flex flex-col
         {expandedId === media.id ? 'border-accent/50' : 'border-border hover:border-zinc-600'}"
@@ -516,20 +521,20 @@
         {#if media.status === 'RELEASING'}
           {@const behind = catchUpEpisodeDetails.get(media.id)?.count ?? 0}
           <div class="absolute top-0 left-0 right-0 flex flex-col">
-            <div class="relative flex items-center justify-center gap-1.5 py-1 bg-cyan-900/70 backdrop-blur-sm text-cyan-300 text-[10px] uppercase tracking-widest font-semibold">
+            <div class="relative flex items-center justify-center gap-1.5 py-1 bg-cyan-900/90 text-cyan-300 text-[10px] uppercase tracking-widest font-semibold">
               <span class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span>Airing
               {#if behind > 0}
                 <span class="absolute right-2">+{behind}</span>
               {/if}
             </div>
             {#if media.nextAiringAt != null}
-              <div class="flex items-center justify-center py-0.5 bg-cyan-950/80 backdrop-blur-sm text-cyan-300/80 text-[9px] uppercase tracking-wider font-medium">
-                {formatCountdown(media.nextAiringAt)}
+              <div class="flex items-center justify-center py-0.5 bg-cyan-950/90 text-cyan-300/80 text-[9px] uppercase tracking-wider font-medium">
+                {formatCountdown(media.nextAiringAt, clock.now)}
               </div>
             {/if}
           </div>
         {:else if media.status === 'NOT_YET_RELEASED'}
-          <div class="absolute top-0 left-0 right-0 flex items-center justify-center py-1 bg-orange-900/70 backdrop-blur-sm text-orange-300 text-[10px] uppercase tracking-widest font-semibold">
+          <div class="absolute top-0 left-0 right-0 flex items-center justify-center py-1 bg-orange-900/90 text-orange-300 text-[10px] uppercase tracking-widest font-semibold">
             Upcoming
           </div>
         {/if}
@@ -537,7 +542,7 @@
         <!-- On-break marker: overlaid at the bottom of the fixed-height cover
              (just above the status banner) so it never changes card height. -->
         {#if onBreak}
-          <div class="absolute bottom-0 left-0 right-0 py-0.5 bg-amber-900/80 backdrop-blur-sm text-amber-300 text-[9px] uppercase tracking-widest font-semibold text-center">
+          <div class="absolute bottom-0 left-0 right-0 py-0.5 bg-amber-900/90 text-amber-300 text-[9px] uppercase tracking-widest font-semibold text-center">
             On break
           </div>
         {/if}
@@ -566,7 +571,7 @@
   {/snippet}
 
   {#snippet watchlistCard(media: Media, entry: LibraryEntry)}
-    {@const stats = mediaStats.get(media.id) ?? { done: 0, count: 0 }}
+    {@const stats = mediaStats.get(media.id) ?? { done: 0, count: 0, aired: 0 }}
     {@const watched = stats.done}
     {@const total = media.totalEpisodes ?? stats.count}
     {@const percent = progressPercent(watched, total)}
@@ -607,7 +612,7 @@
           <div class="flex h-full w-full items-center justify-center text-3xl text-zinc-700">◈</div>
         {/if}
         {#if badge !== 'WATCHING'}
-          <span class="absolute left-1.5 top-1.5 rounded px-1.5 py-0.5 text-[9px] font-bold tracking-wide backdrop-blur-sm
+          <span class="absolute left-1.5 top-1.5 rounded px-1.5 py-0.5 text-[9px] font-bold tracking-wide
             {badge === 'AIRING' ? 'bg-red-700/90 text-red-50' :
              badge === 'PLANNED' ? 'bg-zinc-600/90 text-zinc-100' :
              badge === 'PAUSED' ? 'bg-amber-700/90 text-amber-50' :
@@ -638,7 +643,7 @@
             href={streamingUrl}
             target="_blank"
             rel="noopener"
-            class="flex min-h-0 flex-1 items-center justify-center bg-zinc-950/75 text-zinc-200 backdrop-blur-sm transition-colors hover:bg-accent/80 hover:text-white focus-visible:bg-accent/80 focus-visible:text-white focus-visible:outline-none"
+            class="flex min-h-0 flex-1 items-center justify-center bg-zinc-950/85 text-zinc-200 transition-colors hover:bg-accent/80 hover:text-white focus-visible:bg-accent/80 focus-visible:text-white focus-visible:outline-none"
             aria-label="Watch {getTitle(media, lang)} and open its sidebar"
             title="Watch now"
             onclick={event => {
@@ -655,7 +660,7 @@
           </a>
           <button
             type="button"
-            class="flex min-h-0 flex-1 items-center justify-center border-t border-border bg-surface-2/75 text-zinc-300 backdrop-blur-sm transition-colors hover:bg-zinc-800/80 hover:text-white focus-visible:bg-zinc-800/80 focus-visible:text-white focus-visible:outline-none"
+            class="flex min-h-0 flex-1 items-center justify-center border-t border-border bg-surface-2/90 text-zinc-300 transition-colors hover:bg-zinc-800/80 hover:text-white focus-visible:bg-zinc-800/80 focus-visible:text-white focus-visible:outline-none"
             aria-label="Open sidebar for {getTitle(media, lang)}"
             title="Open sidebar"
             onclick={event => {
@@ -720,7 +725,7 @@
                         <span class="line-clamp-2 text-[11px] font-medium leading-4 text-zinc-200">{getTitle(media, lang)}</span>
                         <span class="mt-auto flex items-end justify-between gap-2 text-[10px] text-zinc-500">
                           <span>{media.nextAiringEpisode !== null ? `Ep ${media.nextAiringEpisode}` : 'Episode TBA'}</span>
-                          <span class="whitespace-nowrap {day.isToday ? 'text-accent' : ''}">{formatCountdown(media.nextAiringAt)}</span>
+                          <span class="whitespace-nowrap {day.isToday ? 'text-accent' : ''}">{formatCountdown(media.nextAiringAt, clock.now)}</span>
                         </span>
                       </span>
                     </button>

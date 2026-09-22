@@ -36,7 +36,7 @@
 </script>
 
 <div role="presentation" class="fixed inset-0 z-50 flex items-center justify-center p-4" onclick={onclose} onkeydown={e => e.key === 'Escape' && onclose()}>
-  <div class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+  <div class="absolute inset-0 bg-black/70"></div>
   <div
     role="dialog"
     tabindex="-1"

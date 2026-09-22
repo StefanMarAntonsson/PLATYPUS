@@ -6,6 +6,7 @@ import {
   isOnBreak,
   streamingIconUrl,
   streamingSiteFromUrl,
+  timeAgo,
 } from "./utils.js";
 
 const HOUR = 3_600_000;
@@ -71,4 +72,11 @@ test("streaming platform icons use Dashboard Icons CDN filenames", () => {
     "/amazon-prime.svg",
   );
   expect(streamingIconUrl("https://www.hidive.com/video/example")).toBeNull();
+});
+
+test("relative time helpers use an explicit clock when given one", () => {
+  const start = Date.now();
+  expect(timeAgo(start, start + 5 * 60_000)).toBe("5m ago");
+  expect(formatCountdown(start + 10 * DAY, start + 9 * DAY)).toBe("in 1d");
+  expect(isOnBreak(start + 8 * DAY, start + 2 * DAY)).toBe(false);
 });
