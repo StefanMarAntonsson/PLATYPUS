@@ -70,3 +70,26 @@ body {
 .border-accent\/40 {
   border-color: color-mix(in srgb, var(--accent) 40%, transparent);
 }
+
+/* Cover images fade in once loaded (see `fadeInOnLoad`). */
+img.fade-in-image {
+  transition:
+    opacity 250ms ease-out,
+    transform 300ms ease;
+}
+img.fade-in-image[data-loading] {
+  opacity: 0;
+}
+
+/* Respect the system "reduce motion" setting for CSS animations and
+   transitions. Svelte transitions use `motionDuration` from $lib/motion. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

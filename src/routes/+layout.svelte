@@ -79,7 +79,28 @@
   <title>PLATYPUS</title>
 </svelte:head>
 
-{#if fs.status !== 'ready'}
+{#if fs.status === 'initializing'}
+  <!-- Skeleton of the app shell while the library loads. -->
+  <div class="fixed inset-0 z-[100] flex flex-col bg-[#09090b]" aria-busy="true" aria-label="Loading your library">
+    <div class="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-surface px-4">
+      <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-accent text-sm font-black text-white">P</span>
+      {#each [0, 1, 2, 3] as _}
+        <span class="h-3 w-16 animate-pulse rounded bg-zinc-800"></span>
+      {/each}
+    </div>
+    <div class="grid grid-cols-[repeat(auto-fill,minmax(135px,1fr))] gap-3 p-4 md:p-6">
+      {#each Array.from({ length: 12 }) as _}
+        <div class="overflow-hidden rounded-md border border-border bg-surface-2/40">
+          <div class="aspect-[4/5] animate-pulse bg-zinc-800/70"></div>
+          <div class="space-y-2 p-2">
+            <div class="h-2.5 w-4/5 animate-pulse rounded bg-zinc-800"></div>
+            <div class="h-2 w-1/2 animate-pulse rounded bg-zinc-800"></div>
+          </div>
+        </div>
+      {/each}
+    </div>
+  </div>
+{:else if fs.status === 'error'}
   <div class="fixed inset-0 z-[100] flex items-center justify-center bg-[#09090b] p-6">
     <div class="w-full max-w-sm space-y-6 text-center">
       <div class="flex flex-col items-center gap-3">
@@ -88,18 +109,13 @@
         <h1 class="text-2xl font-black tracking-widest text-white">PLATYPUS</h1>
       </div>
 
-      {#if fs.status === 'initializing'}
-        <p class="text-zinc-500 text-sm animate-pulse">Loading...</p>
-
-      {:else if fs.status === 'error'}
-        <div class="space-y-3">
-          <p class="text-red-400 text-sm">{fs.saveError || 'Something went wrong.'}</p>
-          <button
-            class="w-full py-3 rounded-xl text-sm font-medium bg-zinc-800 hover:bg-zinc-700 text-zinc-200 transition-colors"
-            onclick={initFile}
-          >Retry</button>
-        </div>
-      {/if}
+      <div class="space-y-3">
+        <p class="text-red-400 text-sm">{fs.saveError || 'Something went wrong.'}</p>
+        <button
+          class="w-full py-3 rounded-xl text-sm font-medium bg-zinc-800 hover:bg-zinc-700 text-zinc-200 transition-colors"
+          onclick={initFile}
+        >Retry</button>
+      </div>
     </div>
   </div>
 {/if}

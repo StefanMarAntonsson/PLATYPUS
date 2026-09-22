@@ -1,6 +1,7 @@
 <script lang="ts">
   import { createManualMedia } from '$lib/store.svelte.js';
   import type { MediaKind } from '$lib/types.js';
+  import { dialogFocus } from '$lib/actions.js';
 
   interface Props {
     onclose: () => void;
@@ -16,21 +17,10 @@
   let description = $state('');
   let coverImage = $state<string | null>(null);
   let error = $state('');
-  let titleInput = $state<HTMLInputElement | null>(null);
   let coverInput = $state<HTMLInputElement | null>(null);
 
   const COVER_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
   const MAX_COVER_BYTES = 5 * 1024 * 1024;
-
-  $effect(() => {
-    titleInput?.focus();
-
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onclose();
-    };
-    window.addEventListener('keydown', closeOnEscape);
-    return () => window.removeEventListener('keydown', closeOnEscape);
-  });
 
   function chooseCover(event: Event) {
     const file = (event.currentTarget as HTMLInputElement).files?.[0];
@@ -109,6 +99,7 @@
     role="dialog"
     aria-modal="true"
     aria-labelledby="add-media-title"
+    use:dialogFocus={{ onescape: onclose, initialFocus: '[data-autofocus]' }}
   >
     <div class="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
       <div>
@@ -122,7 +113,7 @@
       <label class="block text-xs font-medium text-zinc-400">
         Title
         <input
-          bind:this={titleInput}
+          data-autofocus
           bind:value={title}
           class="mt-1.5 w-full rounded-md border border-border bg-surface-2 px-3 py-2 text-sm text-white outline-none placeholder:text-zinc-600 focus:border-accent"
           placeholder="Movie or series title"

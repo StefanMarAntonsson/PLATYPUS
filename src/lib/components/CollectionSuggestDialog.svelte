@@ -1,6 +1,7 @@
 <script lang="ts">
   import { appData, createCollection, addMediaToCollection, updateCollection } from '$lib/store.svelte.js';
   import { getTitle } from '$lib/utils.js';
+  import { dialogFocus } from '$lib/actions.js';
 
   interface Props {
     mediaId: number;
@@ -35,15 +36,14 @@
   }
 </script>
 
-<div role="presentation" class="fixed inset-0 z-50 flex items-center justify-center p-4" onclick={onclose} onkeydown={e => e.key === 'Escape' && onclose()}>
-  <div class="absolute inset-0 bg-black/70"></div>
+<div class="fixed inset-0 z-[70] flex items-center justify-center p-4">
+  <button class="absolute inset-0 cursor-default bg-black/70" tabindex="-1" aria-label="Close" onclick={onclose}></button>
   <div
     role="dialog"
-    tabindex="-1"
     aria-modal="true"
+    aria-label="Add to a collection"
     class="relative bg-zinc-900 border border-zinc-700 rounded-xl p-5 w-full max-w-sm shadow-2xl space-y-4"
-    onclick={e => e.stopPropagation()}
-    onkeydown={e => e.stopPropagation()}
+    use:dialogFocus={{ onescape: onclose }}
   >
     <div>
       <h2 class="text-base font-semibold text-white">Add to a Collection?</h2>

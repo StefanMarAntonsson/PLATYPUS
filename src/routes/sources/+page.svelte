@@ -244,7 +244,11 @@
   <section class="space-y-3">
     <h3 class="text-sm font-semibold text-zinc-200">Configured connections</h3>
     {#if !sourcesState.ready}
-      <p class="text-sm text-zinc-500">Loading sources…</p>
+      <div class="space-y-2" aria-busy="true" aria-label="Loading sources">
+        {#each [0, 1] as _}
+          <div class="h-14 animate-pulse rounded-md border border-border bg-surface-2/30"></div>
+        {/each}
+      </div>
     {:else if !sourcesState.sources.length}
       <p class="rounded-md border border-dashed border-border py-10 text-center text-sm text-zinc-500">No sources configured yet.</p>
     {:else}

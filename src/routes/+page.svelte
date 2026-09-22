@@ -1,3 +1,9 @@
+<script module lang="ts">
+  // Where each view was scrolled, and which sidebar was open, so coming back
+  // from a details page returns to the same place.
+  const savedViewState = new Map<string, { scrollTop: number; expandedId: number | null }>();
+</script>
+
 <script lang="ts">
   import { untrack } from 'svelte';
   import { fade, fly } from 'svelte/transition';
@@ -14,6 +20,8 @@
   import { openExternalUrl } from '$lib/external-links.js';
   import { virtualGridWindow } from '$lib/virtual-grid.js';
   import { clock } from '$lib/clock.svelte.js';
+  import { dialogFocus, fadeInOnLoad } from '$lib/actions.js';
+  import { motionDuration } from '$lib/motion.js';
   import { catchUpDetails, filterLibraryItemsForView, selectCatchUpItems, type CatchUpSort } from '$lib/library-view.js';
 
   interface Props {
@@ -57,7 +65,7 @@
   let searchText = $state('');
   let searchInput = $state<HTMLInputElement | null>(null);
   let collectTarget = $state<number | null>(null);
-  let expandedId = $state<number | null>(null);
+  let expandedId = $state<number | null>(untrack(() => savedViewState.get(view)?.expandedId ?? null));
   let newestFirst = $state(true);
   let syncing = $state<number | null>(null);
   let syncResult = $state<{ id: number; msg: string; ok: boolean } | null>(null);
@@ -328,17 +336,6 @@
   }
 
   $effect(() => {
-    if (expandedId === null) return;
-
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') expandedId = null;
-    };
-
-    window.addEventListener('keydown', closeOnEscape);
-    return () => window.removeEventListener('keydown', closeOnEscape);
-  });
-
-  $effect(() => {
     const focusSearch = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
@@ -413,9 +410,34 @@
     libraryScrollTop = 0;
   });
 
+  let watchlistScroller = $state<HTMLElement | null>(null);
+  let scrollRestored = false;
+
+  $effect(() => {
+    savedViewState.set(view, { scrollTop: untrack(() => savedViewState.get(view)?.scrollTop ?? 0), expandedId });
+  });
+
+  function rememberScroll(scrollTop: number) {
+    savedViewState.set(view, { scrollTop, expandedId });
+  }
+
+  // Restore once the grid has rendered and measured its rows.
+  $effect(() => {
+    const scroller = isWatchlist ? watchlistScroller : libraryScroller;
+    if (scrollRestored || !scroller || gridItems.length === 0) return;
+    scrollRestored = true;
+    const scrollTop = untrack(() => savedViewState.get(view)?.scrollTop ?? 0);
+    if (scrollTop <= 0) return;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      scroller.scrollTop = scrollTop;
+      if (!isWatchlist) libraryScrollTop = scroller.scrollTop;
+    }));
+  });
+
   function handleLibraryScroll(event: Event) {
     if (!(event.currentTarget instanceof HTMLElement)) return;
     const nextScrollTop = event.currentTarget.scrollTop;
+    rememberScroll(nextScrollTop);
     const nextWindow = virtualGridWindow({
       itemCount: gridItems.length,
       columnCount: libraryColumnCount,
@@ -447,6 +469,21 @@
 />
 
 <div class="flex h-full min-h-0 flex-col">
+  {#if bulkSyncing}
+    <div
+      class="h-1 shrink-0 bg-zinc-800"
+      role="progressbar"
+      aria-label="Syncing airing titles"
+      aria-valuemin={0}
+      aria-valuemax={bulkTotal}
+      aria-valuenow={bulkDone}
+    >
+      <div
+        class="h-full bg-accent transition-[width] duration-300 {bulkTotal === 0 ? 'w-1/4 animate-pulse' : ''}"
+        style={bulkTotal > 0 ? `width:${Math.max(4, (bulkDone / bulkTotal) * 100)}%` : undefined}
+      ></div>
+    </div>
+  {/if}
   {#if isWatchlist}
     <div class="flex shrink-0 flex-wrap items-center gap-3 px-4 py-3 md:px-6">
       <div class="inline-flex shrink-0 items-center rounded-lg bg-zinc-900/90 p-1 shadow-inner shadow-black/40" role="group" aria-label="Watchlist view">
@@ -499,15 +536,18 @@
         {/if}
         {#if fs.status === 'ready'}
           <button
-            class="flex items-center gap-2 rounded-md border border-border bg-surface-2/50 px-3 py-2 text-sm text-zinc-400 transition-colors hover:border-zinc-500 hover:text-zinc-200 disabled:opacity-50"
-            onclick={handleBulkSync}
-            disabled={bulkSyncing}
+            class="flex items-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors
+              {bulkSyncing
+                ? 'border-accent/50 bg-accent/10 text-accent hover:bg-accent/20'
+                : 'border-border bg-surface-2/50 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200'}"
+            onclick={() => bulkSyncing ? bulkAbortCtrl?.abort() : handleBulkSync()}
+            title={bulkSyncing ? 'Cancel sync' : 'Sync airing titles'}
           >
             <span class="inline-block text-base {bulkSyncing ? 'animate-spin' : ''}">↻</span>
             {#if bulkSyncing && bulkTotal > 0}
-              Syncing {bulkDone}/{bulkTotal}…
+              Syncing {bulkDone}/{bulkTotal} · Cancel
             {:else if bulkSyncing}
-              Syncing…
+              Syncing… · Cancel
             {:else if appData.settings.lastSyncedAt}
               Synced {timeAgo(appData.settings.lastSyncedAt, clock.now)}
             {:else}
@@ -555,6 +595,8 @@
             alt={getTitle(media, lang)}
             class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
             loading="lazy"
+            decoding="async"
+            use:fadeInOnLoad
           />
         {:else}
           <div class="w-full h-full flex items-center justify-center text-zinc-600 text-3xl">◈</div>
@@ -651,6 +693,8 @@
             alt={getTitle(media, lang)}
             class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
             loading="lazy"
+            decoding="async"
+            use:fadeInOnLoad
           />
         {:else}
           <div class="flex h-full w-full items-center justify-center text-3xl text-zinc-700">◈</div>
@@ -772,7 +816,7 @@
                       onclick={() => toggleExpand(media.id)}
                     >
                       {#if media.coverImageMedium ?? media.coverImageLarge}
-                        <img src={media.coverImageMedium ?? media.coverImageLarge ?? ''} alt="" class="h-16 w-12 shrink-0 rounded-sm object-cover" loading="lazy" />
+                        <img src={media.coverImageMedium ?? media.coverImageLarge ?? ''} alt="" class="h-16 w-12 shrink-0 rounded-sm object-cover" loading="lazy" decoding="async" use:fadeInOnLoad />
                       {:else}
                         <span class="flex h-16 w-12 shrink-0 items-center justify-center rounded-sm bg-zinc-800 text-zinc-600">◈</span>
                       {/if}
@@ -793,7 +837,7 @@
                     {#each tbaItems as { media, entry } (entry.id)}
                       <button class="flex w-full gap-2 border-b border-border/60 p-2 text-left last:border-b-0 hover:bg-zinc-800/60" onclick={() => toggleExpand(media.id)}>
                         {#if media.coverImageMedium ?? media.coverImageLarge}
-                          <img src={media.coverImageMedium ?? media.coverImageLarge ?? ''} alt="" class="h-16 w-12 shrink-0 rounded-sm object-cover" loading="lazy" />
+                          <img src={media.coverImageMedium ?? media.coverImageLarge ?? ''} alt="" class="h-16 w-12 shrink-0 rounded-sm object-cover" loading="lazy" decoding="async" use:fadeInOnLoad />
                         {:else}
                           <span class="flex h-16 w-12 shrink-0 items-center justify-center rounded-sm bg-zinc-800 text-zinc-600">◈</span>
                         {/if}
@@ -821,7 +865,11 @@
                 : 'No titles match this filter.'}
             </div>
           {:else}
-            <div class="min-h-0 flex-1 overflow-y-auto">
+            <div
+              class="min-h-0 flex-1 overflow-y-auto"
+              bind:this={watchlistScroller}
+              onscroll={event => rememberScroll(event.currentTarget.scrollTop)}
+            >
               <div class="grid grid-cols-[repeat(auto-fill,minmax(135px,1fr))] gap-3 pb-6">
                 {#each gridItems as { media, entry } (entry.id)}
                   {@render watchlistCard(media, entry)}
@@ -865,15 +913,17 @@
     <button
       class="fixed inset-0 z-[55] cursor-default bg-black/50"
       aria-label="Close episode sidebar"
+      tabindex="-1"
       onclick={() => expandedId = null}
-      transition:fade={{ duration: 150 }}
+      transition:fade={{ duration: motionDuration(150) }}
     ></button>
     <div
       class="fixed inset-y-0 right-0 z-[60] w-full space-y-4 overflow-y-auto border-l border-accent/30 bg-surface p-5 shadow-2xl sm:w-[32rem]"
       role="dialog"
       aria-modal="true"
       aria-label={`Episodes for ${getTitle(m, lang)}`}
-      transition:fly={{ x: 480, duration: 200 }}
+      transition:fly={{ x: 480, duration: motionDuration(200) }}
+      use:dialogFocus={{ onescape: () => expandedId = null }}
     >
       <!-- Header -->
       <div class="flex flex-col gap-4">
@@ -923,7 +973,7 @@
             >{expandedMovieWatched ? '✓ Watched' : 'Mark watched'}</button>
           {/if}
           <a
-            href="{base}/{m.id < 0 ? 'media' : 'anime'}/{m.id}"
+            href="{base}/media/{m.id}"
             class="text-xs px-3 py-1.5 rounded bg-surface-2 border border-border hover:border-zinc-500 text-zinc-300 transition-colors"
           >Details</a>
           <button
@@ -932,6 +982,8 @@
           >Remove</button>
           <button
             class="text-zinc-500 hover:text-white transition-colors text-lg leading-none"
+            aria-label="Close sidebar"
+            title="Close (Esc)"
             onclick={() => expandedId = null}
           >×</button>
         </div>
