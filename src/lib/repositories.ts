@@ -1,6 +1,33 @@
 import { invoke } from "@tauri-apps/api/core";
 import { parseV2Data } from "./legacy-data.js";
-import type { AppData } from "./types.js";
+import type { AppData, Settings } from "./types.js";
+
+/** Areas of `AppData` stored as one database row per record. */
+export const RECORD_AREAS = [
+  "media",
+  "episodes",
+  "watchEvents",
+  "library",
+  "collections",
+  "collectionEntries",
+  "series",
+  "seriesEntries",
+] as const;
+export type RecordArea = (typeof RECORD_AREAS)[number];
+
+type AreaRecords = { [A in RecordArea]?: AppData[A] };
+
+/**
+ * A set of record-level writes applied in one native transaction. `replace`
+ * rewrites a whole area, `delete` removes records by ID, and `upsert` inserts
+ * or updates individual records.
+ */
+export interface AppDataChanges {
+  replace?: AreaRecords;
+  delete?: { [A in RecordArea]?: number[] };
+  upsert?: AreaRecords;
+  settings?: Settings;
+}
 
 /**
  * Persistence boundary used by the desktop application service.
@@ -10,7 +37,16 @@ import type { AppData } from "./types.js";
  */
 export interface AppDataRepository {
   load(): Promise<AppData | null>;
-  save(data: AppData): Promise<void>;
+  applyChanges(changes: AppDataChanges): Promise<void>;
+}
+
+/** A change set that replaces the entire stored library with `data`. */
+export function replaceAllChanges(data: AppData): AppDataChanges {
+  const replace: AreaRecords = {};
+  for (const area of RECORD_AREAS) {
+    (replace as Record<RecordArea, unknown[]>)[area] = data[area];
+  }
+  return { replace, settings: data.settings };
 }
 
 export class DesktopAppDataRepository implements AppDataRepository {
@@ -19,10 +55,8 @@ export class DesktopAppDataRepository implements AppDataRepository {
     return serialized === null ? null : parseV2Data(serialized);
   }
 
-  async save(data: AppData): Promise<void> {
-    await invoke("save_app_data", {
-      data: JSON.stringify({ ...data, exportedAt: new Date().toISOString() }),
-    });
+  async applyChanges(changes: AppDataChanges): Promise<void> {
+    await invoke("apply_app_data_changes", { changes: JSON.stringify(changes) });
   }
 }
 

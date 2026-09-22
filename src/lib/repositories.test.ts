@@ -5,7 +5,8 @@ const invoke = vi.fn();
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
-const { DesktopAppDataRepository } = await import("./repositories.js");
+const { DesktopAppDataRepository, RECORD_AREAS, replaceAllChanges } =
+  await import("./repositories.js");
 
 describe("desktop application-data repository", () => {
   test("returns null when the native repository has no saved library", async () => {
@@ -21,23 +22,21 @@ describe("desktop application-data repository", () => {
     await expect(new DesktopAppDataRepository().load()).resolves.toMatchObject({ version: 2 });
   });
 
-  test("saves a complete versioned document through the narrow native command", async () => {
+  test("sends record-level change sets through the narrow native command", async () => {
     invoke.mockResolvedValueOnce(undefined);
+
+    await new DesktopAppDataRepository().applyChanges({ delete: { episodes: [4] } });
+
+    expect(invoke).toHaveBeenCalledWith("apply_app_data_changes", {
+      changes: JSON.stringify({ delete: { episodes: [4] } }),
+    });
+  });
+
+  test("a full replacement covers every stored area and the settings", () => {
     const data = structuredClone(EMPTY_APP_DATA);
+    const changes = replaceAllChanges(data);
 
-    await new DesktopAppDataRepository().save(data);
-
-    expect(invoke).toHaveBeenCalledWith("save_app_data", {
-      data: expect.stringContaining('"version":2'),
-    });
-
-    const lastCall = invoke.mock.lastCall;
-    expect(lastCall).toBeDefined();
-    const { data: serialized } = lastCall![1] as { data: string };
-    expect(JSON.parse(serialized)).toMatchObject({
-      version: 2,
-      exportedAt: expect.any(String),
-      settings: EMPTY_APP_DATA.settings,
-    });
+    expect(Object.keys(changes.replace ?? {}).sort()).toEqual([...RECORD_AREAS].sort());
+    expect(changes.settings).toEqual(data.settings);
   });
 });

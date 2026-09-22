@@ -6,7 +6,8 @@
   import { onMount } from 'svelte';
   import type { Window as TauriWindow } from '@tauri-apps/api/window';
   import { isTauri } from '@tauri-apps/api/core';
-  import { fs, initFile } from '$lib/store.svelte.js';
+  import { flushPendingSave, fs, initFile } from '$lib/store.svelte.js';
+  import { notify } from '$lib/notifications.svelte.js';
   import NotificationOverlay from '$lib/components/NotificationOverlay.svelte';
   import AppUpdateBanner from '$lib/components/AppUpdateBanner.svelte';
   import { initializeAppUpdates } from '$lib/app-update.svelte.js';
@@ -37,9 +38,25 @@
     if (!isTauri()) return;
     void initializeAppUpdates();
     // Let the window module finish initializing before its constructor is used.
-    void import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
+    let unlistenClose: (() => void) | undefined;
+    let closeAnyway = false;
+    void import('@tauri-apps/api/window').then(async ({ getCurrentWindow }) => {
       desktopWindow = getCurrentWindow();
+      // Write any edit still waiting in the save debounce before the window
+      // goes away. If that fails, keep the window open once so the user sees
+      // the error; a second close request quits regardless.
+      unlistenClose = await desktopWindow.onCloseRequested(async (event) => {
+        if (closeAnyway) return;
+        try {
+          await flushPendingSave();
+        } catch (error) {
+          closeAnyway = true;
+          event.preventDefault();
+          notify('error', 'Your latest changes could not be saved', `${error instanceof Error ? error.message : error} Close the window again to quit anyway.`);
+        }
+      });
     });
+    return () => unlistenClose?.();
   });
 
   const current = $derived(page.route.id);
