@@ -12,6 +12,15 @@ export type LibraryStatus =
   | "REWATCHING";
 export type TitleLanguage = "english" | "romaji" | "native";
 export type CardSize = "small" | "medium" | "large";
+export type LibraryLayout = "grid" | "list";
+export type LibrarySort =
+  | "title"
+  | "airing_day"
+  | "recently_aired"
+  | "next_airing"
+  | "progress"
+  | "updated"
+  | "added";
 export type WatchSite =
   | "any"
   | "crunchyroll"
@@ -74,6 +83,22 @@ export interface Media {
   syncSource?:
     | { kind: "anilist"; providerId: string }
     | { kind: "connection"; connectionId: string; providerId: string };
+  /**
+   * Where this item's airing schedule comes from when its main source has no
+   * air times (e.g. a Kitsu season scheduled from its TVmaze show).
+   * `checkedAt` alone records a lookup that found no match, so it is retried
+   * later rather than on every sync.
+   */
+  scheduleLink?:
+    | {
+        connectionId: string;
+        providerId: string;
+        seasonNumber: number;
+        episodeOffset: number;
+        canonicalUrl?: string;
+        checkedAt: number;
+      }
+    | { checkedAt: number };
   /** Provider identities are metadata links, never canonical local IDs. */
   providerLinks?: Array<{
     connectionId: string;
@@ -127,6 +152,10 @@ export interface LibraryEntry {
   completedAt: number | null;
   addedAt: number;
   updatedAt: number;
+  /** Optional per-title watch destination. Missing means the first provider link. */
+  watchDestination?:
+    | { kind: "provider"; url: string }
+    | { kind: "custom"; name: string; url: string };
 }
 
 export interface Collection {
@@ -174,6 +203,10 @@ export interface Settings {
   settingsSectionOrder: string[];
   autoSync: boolean;
   showTba: boolean;
+  libraryLayout: LibraryLayout;
+  librarySort: LibrarySort;
+  librarySortDescending: boolean;
+  searchAnimeOnly: boolean;
   lastSyncedAt: number | null;
 }
 

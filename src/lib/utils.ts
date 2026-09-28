@@ -204,3 +204,14 @@ export function debounce<T extends (...args: any[]) => void>(fn: T, ms: number):
     timer = setTimeout(() => fn(...args), ms);
   }) as T;
 }
+
+/** Strip HTML tags (e.g. a provider's synopsis) and collapse whitespace. */
+export function plainText(value: string | undefined): string | null {
+  if (!value) return null;
+  return (
+    value
+      .replace(/<[^>]*>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim() || null
+  );
+}

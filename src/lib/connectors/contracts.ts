@@ -82,10 +82,28 @@ export interface NormalizedMedia {
   startDate?: IsoDate;
   endDate?: IsoDate;
   runtimeMinutes?: number;
+  /**
+   * Optional descriptive fields shown in search results. Mapped values are
+   * provider data and are not validated, so readers must check their types.
+   */
+  /** Number of episodes, when the provider knows it. */
+  episodeCount?: number;
+  /** Provider's own format label, e.g. "TV", "MOVIE", "OVA". */
+  format?: string;
+  /** Provider's own content type, e.g. TVmaze's "Animation" or "Scripted". */
+  mediaType?: string;
+  /** Broadcast season, e.g. "FALL", together with its year. */
+  season?: string;
+  seasonYear?: number;
+  /** Broadcaster, streaming service, or studio. */
+  network?: string;
   lifecycle?: MediaLifecycle;
   genres?: string[];
   artwork?: ArtworkReference[];
   canonicalUrl?: string;
+  /** Where to stream the title: a URL, `{ url, site?, type?, color? }`, or a
+   * list of either. Unvalidated provider data; see `streamingLinksFrom`. */
+  streamingLinks?: unknown;
   externalIds?: Record<string, string>;
 }
 

@@ -55,7 +55,7 @@
       class="absolute bg-zinc-800 border border-zinc-700 rounded-lg py-1 shadow-xl min-w-[160px]"
       style="left:{contextMenu.x}px;top:{contextMenu.y}px"
     >
-      {#if canSyncMedia(appData.media.find(media => media.id === contextMenu.mediaId))}
+      {#if canSyncMedia(appData.media.find(media => media.id === contextMenu?.mediaId))}
         <button
           class="w-full text-left px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-700"
           onclick={async () => { await syncMedia(contextMenu!.mediaId); contextMenu = null; }}

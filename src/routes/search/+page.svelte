@@ -3,9 +3,10 @@
   import { goto } from '$app/navigation';
   import type { NormalizedMedia, SourceConnection } from '$lib/connectors/contracts.js';
   import type { Media } from '$lib/types.js';
-  import { appData, attachSourceToMedia, createMediaFromSource } from '$lib/store.svelte.js';
+  import { appData, attachSourceToMedia, createMediaFromSource, updateSettings } from '$lib/store.svelte.js';
   import { syncMedia } from '$lib/api/sync.js';
-  import { debounce } from '$lib/utils.js';
+  import { debounce, plainText } from '$lib/utils.js';
+  import { isLikelyAnime, searchResultFacts } from '$lib/search-details.js';
   import {
     groupSearchResults,
     interleaveSearchResults,
@@ -132,8 +133,17 @@
     return Number.isInteger(year) ? year : null;
   }
 
+  const animeOnly = $derived(appData.settings.searchAnimeOnly ?? true);
+  const hiddenCount = $derived(
+    animeOnly
+      ? searchState.sourceGroups.reduce((count, group) => count + group.results.filter(result => !isLikelyAnime(result)).length, 0)
+      : 0,
+  );
+
   const groupedResults = $derived.by(() => {
-    const resultsBySource = searchState.sourceGroups.map(group => group.results.map((result): SourceResult => ({
+    const resultsBySource = searchState.sourceGroups.map(group => group.results
+      .filter(result => !animeOnly || isLikelyAnime(result))
+      .map((result): SourceResult => ({
         key: `${group.connection.id}:${result.providerId}`,
         sourceKey: group.connection.id,
         sourceName: group.connection.name,
@@ -231,6 +241,20 @@
     {#if error}
       <p class="text-sm text-red-400">{error}</p>
     {/if}
+    {#if searchState.query.length >= 2}
+      <div class="flex items-center justify-end gap-3 text-xs text-zinc-500">
+        {#if hiddenCount > 0}
+          <span>{hiddenCount} non-anime result{hiddenCount === 1 ? '' : 's'} hidden</span>
+        {/if}
+        <button
+          type="button"
+          class="rounded border px-2 py-1 transition-colors
+            {animeOnly ? 'border-accent/40 bg-accent/10 text-accent' : 'border-border text-zinc-400 hover:border-zinc-500 hover:text-zinc-200'}"
+          aria-pressed={animeOnly}
+          onclick={() => updateSettings({ searchAnimeOnly: !animeOnly })}
+        >Anime only</button>
+      </div>
+    {/if}
     {#each sourceErrors as group (group.connection.id)}
       <p class="text-xs text-amber-400">{group.connection.name} search unavailable: {group.error}</p>
     {/each}
@@ -261,6 +285,7 @@
             <div class="space-y-2">
               {#each row.results as result (result.key)}
                 {@const exactMediaId = exactLibraryMediaId(result)}
+                {@const overview = plainText(result.result.overview)}
                 <article class="flex min-w-0 gap-3 rounded-lg bg-surface-2 p-2.5">
                   <div class="h-20 w-14 shrink-0 overflow-hidden rounded-lg bg-zinc-800">
                     {#if result.result.artwork?.[0]}
@@ -277,10 +302,18 @@
                       </p>
                       <span class="rounded border border-border bg-zinc-900 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-zinc-400">{result.sourceName}</span>
                     </div>
-                    <p class="mt-0.5 text-[10px] text-zinc-600">{result.sourceName} ID: {result.providerId}</p>
-
-                    <p class="text-xs text-zinc-500">{result.result.kind}{result.result.releaseDate ? ` · ${result.result.releaseDate}` : ''}</p>
-                    {#if result.result.overview}<p class="mt-1 line-clamp-2 text-xs text-zinc-500">{result.result.overview}</p>{/if}
+                    {#if result.result.originalTitle && result.result.originalTitle !== result.result.title}
+                      <p class="truncate text-xs text-zinc-500">{result.result.originalTitle}</p>
+                    {/if}
+                    <p class="mt-1 text-xs text-zinc-300">{searchResultFacts(result.result).join(' · ')}</p>
+                    {#if Array.isArray(result.result.genres) && result.result.genres.length > 0}
+                      <div class="mt-1.5 flex flex-wrap gap-1">
+                        {#each result.result.genres.filter(genre => typeof genre === 'string').slice(0, 5) as genre}
+                          <span class="rounded bg-zinc-800/80 px-1.5 py-0.5 text-[10px] text-zinc-400">{genre}</span>
+                        {/each}
+                      </div>
+                    {/if}
+                    {#if overview}<p class="mt-1.5 line-clamp-2 text-xs text-zinc-500">{overview}</p>{/if}
                   </div>
 
                   <div class="shrink-0 self-start">

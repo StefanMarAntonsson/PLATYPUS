@@ -8,6 +8,8 @@
     removeFromLibrary, setMovieWatched, updateLibraryEntry, updateManualMedia,
   } from '$lib/store.svelte.js';
   import { canSyncMedia, syncMedia } from '$lib/api/sync.js';
+  import { airingState } from '$lib/library-view.js';
+  import { clock } from '$lib/clock.svelte.js';
   import {
     getTitle, formatLabel, statusLabel, seasonLabel, formatAirDate, isManualMedia, libraryStatusLabel,
   } from '$lib/utils.js';
@@ -26,6 +28,14 @@
   const events = $derived(mediaWatchEvents(mediaId));
   const movieWatched = $derived(events.some(event => event.episodeId === null));
   const episodeCount = $derived(appData.episodes.filter(episode => episode.mediaId === mediaId).length);
+  const lastAiredAt = $derived(appData.episodes.reduce<number | null>((latest, episode) =>
+    episode.mediaId === mediaId && episode.aired && episode.airingAt !== null
+      ? Math.max(latest ?? -Infinity, episode.airingAt)
+      : latest, null));
+  const displayStatus = $derived(media?.status === 'RELEASING'
+    && airingState(media.status, lastAiredAt, clock.now, media.nextAiringAt) === null
+    ? 'No recent airing'
+    : media ? statusLabel(media.status) : '');
   const sourceLabel = $derived(isManual ? 'Local library' : (media?.providerLinks?.[0]?.connectionName ?? 'Synced library'));
   const lang = $derived(appData.settings.titleLanguage);
   const streamingLinks = $derived((media?.externalLinks ?? []).filter(link => link.type === 'STREAMING').slice(0, 4));
@@ -188,7 +198,7 @@
           <div><span class="text-zinc-600">Source</span> · {sourceLabel}</div>
           <div><span class="text-zinc-600">Format</span> · {isMovie ? 'Movie' : formatLabel(media.format)}</div>
           {#if !isManual}
-            <div><span class="text-zinc-600">Status</span> · {statusLabel(media.status)}</div>
+            <div><span class="text-zinc-600">Status</span> · {displayStatus}</div>
           {/if}
           {#if media.season || media.seasonYear}
             <div><span class="text-zinc-600">Season</span> · {seasonLabel(media.season, media.seasonYear)}</div>
@@ -198,6 +208,14 @@
           {/if}
           {#if media.nextAiringAt}
             <div><span class="text-zinc-600">Next ep</span> · {formatAirDate(media.nextAiringAt)}</div>
+          {/if}
+          {#if media.scheduleLink && 'providerId' in media.scheduleLink}
+            {@const scheduleUrl = media.scheduleLink.canonicalUrl ?? `https://www.tvmaze.com/shows/${media.scheduleLink.providerId}`}
+            <div>
+              <span class="text-zinc-600">Air times</span> ·
+              <a href={scheduleUrl} target="_blank" rel="noopener" class="hover:text-accent" onclick={event => handleExternalLink(event, scheduleUrl)}>TVmaze</a>
+              <span class="text-zinc-600">(CC BY-SA 4.0)</span>
+            </div>
           {/if}
         </div>
 

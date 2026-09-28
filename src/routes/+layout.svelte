@@ -25,8 +25,7 @@
   const collectionsPageVisible = false;
 
   const navItems = [
-    { href: '/',            label: 'Watchlist'   },
-    { href: '/library',     label: 'Library'     },
+    { href: '/',            label: 'Library'     },
     { href: '/search',      label: 'Search'      },
     ...(collectionsPageVisible ? [{ href: '/collections', label: 'Collections' }] : []),
     { href: '/settings',    label: 'Settings'    },
@@ -69,7 +68,7 @@
   };
 
   function isActive(href: string): boolean {
-    if (href === '/') return current === '/' || current === '/watchlist';
+    if (href === '/') return current === '/';
     return current === href || current?.startsWith(`${href}/`) === true;
   }
 </script>
@@ -122,7 +121,7 @@
 
 <div class="flex h-screen flex-col overflow-hidden bg-[#09090b]">
   <header data-tauri-drag-region class="flex h-14 shrink-0 select-none items-stretch border-b border-border bg-surface">
-    <a href="{base}/" class="flex shrink-0 items-center gap-2.5 border-r border-border px-3 sm:px-4" aria-label="PLATYPUS Watchlist">
+    <a href="{base}/" class="flex shrink-0 items-center gap-2.5 border-r border-border px-3 sm:px-4" aria-label="PLATYPUS Library">
       <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-accent text-sm font-black text-white shadow-lg">P</span>
       <span class="hidden text-sm font-black tracking-widest text-white xl:inline">PLATYPUS</span>
     </a>
@@ -152,7 +151,7 @@
           class="flex w-11 items-center justify-center text-zinc-500 transition-colors hover:bg-zinc-700/70 hover:text-white"
           title="Minimize"
           aria-label="Minimize window"
-          onclick={() => void desktopWindow.minimize()}
+          onclick={() => void desktopWindow?.minimize()}
         >
           <svg class="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
             <path d="M3 11.5h10" />
@@ -162,7 +161,7 @@
           class="flex w-11 items-center justify-center text-zinc-500 transition-colors hover:bg-zinc-700/70 hover:text-white"
           title="Maximize or restore"
           aria-label="Maximize or restore window"
-          onclick={() => void desktopWindow.toggleMaximize()}
+          onclick={() => void desktopWindow?.toggleMaximize()}
         >
           <svg class="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
             <rect x="3.25" y="3.25" width="9.5" height="9.5" />
@@ -172,7 +171,7 @@
           class="flex w-11 items-center justify-center text-zinc-500 transition-colors hover:bg-red-600 hover:text-white"
           title="Close"
           aria-label="Close window"
-          onclick={() => void desktopWindow.close()}
+          onclick={() => void desktopWindow?.close()}
         >
           <svg class="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
             <path d="m3.5 3.5 9 9m0-9-9 9" />

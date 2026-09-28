@@ -332,9 +332,14 @@ export function createMediaFromSource(
         ? "RELEASING"
         : source.lifecycle === "cancelled"
           ? "CANCELLED"
-          : "FINISHED",
+          : source.lifecycle === "announced" || source.lifecycle === "in_production"
+            ? "NOT_YET_RELEASED"
+            : "FINISHED",
     format: source.kind === "movie" ? "MOVIE" : "TV",
-    totalEpisodes: null,
+    totalEpisodes:
+      Number.isInteger(source.episodeCount) && (source.episodeCount as number) > 0
+        ? (source.episodeCount as number)
+        : null,
     airedEpisodes: source.kind === "movie" ? 1 : 0,
     nextAiringEpisode: null,
     nextAiringAt: null,
@@ -614,6 +619,10 @@ export function upsertEpisodes(incoming: Episode[]) {
   persist({ episodes: changedEpisodes, watchEvents: changedEvents });
 }
 
+/**
+ * Re-derive a title's status after the user changed its episode states, and
+ * record the change so "recently updated" sorting reflects watch activity.
+ */
 export function autoUpdateLibraryStatus(mediaId: number) {
   const entryIndex = appData.library.findIndex((l) => l.mediaId === mediaId);
   if (entryIndex < 0) return;
@@ -636,16 +645,14 @@ export function autoUpdateLibraryStatus(mediaId: number) {
       : done >= aired.length && fullyAired
         ? "COMPLETED"
         : "WATCHING";
-  if (entry.status !== newStatus) {
-    // Replacing the record also invalidates consumers that derive a filtered
-    // list from the library array, such as the virtualized completed grid.
-    appData.library[entryIndex] = {
-      ...entry,
-      status: newStatus,
-      updatedAt: Date.now(),
-    };
-    persist({ library: [entry.id] });
-  }
+  // Replacing the record also invalidates consumers that derive a filtered
+  // or sorted list from the library array.
+  appData.library[entryIndex] = {
+    ...entry,
+    status: newStatus,
+    updatedAt: Date.now(),
+  };
+  persist({ library: [entry.id] });
 }
 
 export function setEpisodeState(episodeId: number, state: "unwatched" | "watched" | "skipped") {

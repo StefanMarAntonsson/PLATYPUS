@@ -172,6 +172,16 @@ describe("episode state transitions", () => {
 });
 
 describe("automatic library status", () => {
+  test("records episode changes as a library update even when the status stays the same", () => {
+    const entry = appData.library[0];
+    const episode = appData.episodes[1];
+    vi.setSystemTime(new Date("2026-08-09T10:00:00Z"));
+
+    setEpisodeState(episode.id, "watched");
+
+    expect(appData.library[0]).toMatchObject({ status: entry.status, updatedAt: Date.now() });
+  });
+
   test("completes a finished title only after all aired episodes are done", () => {
     const previousEpisode = appData.episodes[1];
     const previousEntry = appData.library[0];

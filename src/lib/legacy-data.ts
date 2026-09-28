@@ -15,6 +15,10 @@ export const DEFAULT_SETTINGS: Settings = {
   settingsSectionOrder: ["filters", "data", "title", "sync"],
   autoSync: false,
   showTba: true,
+  libraryLayout: "grid",
+  librarySort: "title",
+  librarySortDescending: false,
+  searchAnimeOnly: true,
   lastSyncedAt: null,
 };
 
