@@ -55,14 +55,14 @@
       class="absolute bg-zinc-800 border border-zinc-700 rounded-lg py-1 shadow-xl min-w-[160px]"
       style="left:{contextMenu.x}px;top:{contextMenu.y}px"
     >
-      {#if canSyncMedia(appData.media.find(media => media.id === contextMenu.mediaId))}
+      {#if canSyncMedia(appData.media.find(media => media.id === contextMenu?.mediaId))}
         <button
           class="w-full text-left px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-700"
           onclick={async () => { await syncMedia(contextMenu!.mediaId); contextMenu = null; }}
         >Force sync</button>
       {/if}
       <a
-        href="{base}/anime/{contextMenu.mediaId}"
+        href="{base}/media/{contextMenu.mediaId}"
         class="block px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-700"
         onclick={() => contextMenu = null}
       >Go to anime page</a>
@@ -148,7 +148,7 @@
                 <img src={m.coverImageMedium} alt="" class="w-8 h-11 object-cover rounded" loading="lazy" />
               {/if}
               <span class="flex-1 text-sm text-zinc-200 truncate">{getTitle(m, appData.settings.titleLanguage)}</span>
-              <a href="{base}/anime/{m.id}" class="text-xs text-zinc-500 hover:text-zinc-300 transition-colors">↗</a>
+              <a href="{base}/media/{m.id}" class="text-xs text-zinc-500 hover:text-zinc-300 transition-colors">↗</a>
               <button
                 class="text-xs text-red-500 hover:text-red-400 transition-colors"
                 onclick={() => removeMediaFromCollection(collectionId, m.id)}

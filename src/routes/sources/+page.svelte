@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { save as showSaveDialog } from '@tauri-apps/plugin-dialog';
   import { createCustomSourceTemplate, type CustomSourceInput } from '$lib/connectors/custom-source.js';
+  import { isBuiltinTemplate } from '$lib/connectors/builtin.js';
   import type { SourceTemplateV1, TrackingMode } from '$lib/connectors/contracts.js';
   import { importTrackingHistory } from '$lib/tracking.js';
   import {
@@ -244,7 +245,11 @@
   <section class="space-y-3">
     <h3 class="text-sm font-semibold text-zinc-200">Configured connections</h3>
     {#if !sourcesState.ready}
-      <p class="text-sm text-zinc-500">Loading sources…</p>
+      <div class="space-y-2" aria-busy="true" aria-label="Loading sources">
+        {#each [0, 1] as _}
+          <div class="h-14 animate-pulse rounded-md border border-border bg-surface-2/30"></div>
+        {/each}
+      </div>
     {:else if !sourcesState.sources.length}
       <p class="rounded-md border border-dashed border-border py-10 text-center text-sm text-zinc-500">No sources configured yet.</p>
     {:else}
@@ -321,7 +326,9 @@
             {#if source.template.operations.history && source.connection.tracking.mode !== 'export_only'}
               <button class="rounded-md border border-border px-3 py-1.5 text-sm text-zinc-300 hover:border-zinc-500" onclick={() => importHistory(source.template, source.connection)} disabled={importingHistory === source.connection.id}>{importingHistory === source.connection.id ? 'Importing…' : 'Import history'}</button>
             {/if}
-            <button class="rounded-md border border-red-900/60 px-3 py-1.5 text-sm text-red-400 hover:border-red-700" onclick={() => removeSource(source.connection.id)}>Remove connection</button>
+            {#if !isBuiltinTemplate(source.template.id)}
+              <button class="rounded-md border border-red-900/60 px-3 py-1.5 text-sm text-red-400 hover:border-red-700" onclick={() => removeSource(source.connection.id)}>Remove connection</button>
+            {/if}
           </div>
 
           {#if source.connection.capabilities.search}

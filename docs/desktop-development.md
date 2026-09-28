@@ -33,6 +33,6 @@ On Linux, PLATYPUS disables WebKitGTK's DMA-BUF renderer before creating the win
 
 Developing and compiling the desktop application on Arch is supported. For portable AppImage release artifacts, build on an Ubuntu CI runner or container. Tauri's bundled `linuxdeploy` currently cannot strip the RELR relocations used by current Arch system libraries, so an AppImage bundle may fail there even when the application binary builds successfully.
 
-The desktop repository stores each legacy-data area in SQLite and applies schema migrations transactionally. Before a schema migration, an existing database is copied beside the database as a timestamped `.pre-migration-*.bak` file. On first launch after upgrading from the Phase 2 build, its local-storage library is imported into SQLite and removed only after that write succeeds.
+The desktop repository stores each kind of library record in its own SQLite table and applies schema migrations transactionally; see [ADR 0001](architecture/0001-sqlite-access.md). Before a schema migration, an existing database is copied beside the database as a timestamped `.pre-migration-*.bak` file.
 
 The **Save backup** action writes a portable JSON backup to the `backups` directory below the platform application-data directory and displays the exact path. Source templates and credentials are excluded from library backups.

@@ -2,7 +2,6 @@
   import type { Media, Episode } from '$lib/types.js';
   import {
     appData,
-    cycleEpisodeState,
     toggleEpisodeWatched,
     toggleEpisodeSkipped,
     markAllWatched,
@@ -18,18 +17,25 @@
   }
   let { mediaList, newestFirst = false, limitLongShows = false, onContextMenu }: Props = $props();
 
-  function episodesFor(mediaId: number): Episode[] {
-    let eps = appData.episodes.filter(e => e.mediaId === mediaId).sort((a, b) => a.number - b.number);
-    if (limitLongShows && eps.length > 100) eps = eps.slice(-50);
-    return newestFirst ? eps.reverse() : eps;
-  }
+  // One pass over the library's episodes per render, grouped by title.
+  const groups = $derived.by(() => {
+    const ids = new Set(mediaList.map(media => media.id));
+    const byMedia = new Map<number, Episode[]>();
+    for (const episode of appData.episodes) {
+      if (!ids.has(episode.mediaId)) continue;
+      const list = byMedia.get(episode.mediaId);
+      if (list) list.push(episode);
+      else byMedia.set(episode.mediaId, [episode]);
+    }
+    return new Map([...ids].map(id => {
+      const all = (byMedia.get(id) ?? []).sort((a, b) => a.number - b.number);
+      let eps = limitLongShows && all.length > 100 ? all.slice(-50) : all;
+      if (newestFirst) eps = [...eps].reverse();
+      return [id, { eps, total: all.length, batch: batchStatus(all) }];
+    }));
+  });
 
-  function episodeCount(mediaId: number): number {
-    return appData.episodes.filter(e => e.mediaId === mediaId).length;
-  }
-
-  function batchStatus(mediaId: number): 'all-watched' | 'all-skipped' | 'mixed' | 'none' {
-    const episodes = appData.episodes.filter(e => e.mediaId === mediaId);
+  function batchStatus(episodes: Episode[]): 'all-watched' | 'all-skipped' | 'mixed' | 'none' {
     if (!episodes.length) return 'none';
     if (episodes.every(e => e.watched)) return 'all-watched';
     if (episodes.every(e => e.skipped)) return 'all-skipped';
@@ -49,9 +55,10 @@
 
 <div class="space-y-6">
   {#each mediaList as media (media.id)}
-    {@const eps = episodesFor(media.id)}
-    {@const totalEpisodeCount = episodeCount(media.id)}
-    {@const batch = batchStatus(media.id)}
+    {@const group = groups.get(media.id)}
+    {@const eps = group?.eps ?? []}
+    {@const totalEpisodeCount = group?.total ?? 0}
+    {@const batch = group?.batch ?? 'none'}
     <div>
       <!-- Group header -->
       <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -96,10 +103,16 @@
           {#each eps as ep (ep.id)}
             <div
               class="flex items-center gap-3 px-2 py-1.5 rounded border {epClass(ep)} transition-all cursor-pointer text-sm"
-              onclick={() => cycleEpisodeState(ep.id)}
+              onclick={() => toggleEpisodeWatched(ep.id)}
               role="button"
               tabindex="0"
-              onkeydown={e => e.key === 'Enter' && cycleEpisodeState(ep.id)}
+              aria-pressed={ep.watched}
+              title={ep.watched ? 'Mark unwatched' : 'Mark watched'}
+              onkeydown={e => {
+                if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return;
+                e.preventDefault();
+                toggleEpisodeWatched(ep.id);
+              }}
             >
               <span class="w-12 text-right shrink-0 font-mono text-xs {ep.aired ? 'text-zinc-500' : 'text-zinc-700'}">
                 {ep.seasonNumber !== null && ep.seasonNumber !== undefined && ep.sourceEpisodeNumber !== null && ep.sourceEpisodeNumber !== undefined
@@ -128,13 +141,17 @@
                   class="w-5 h-5 rounded border flex items-center justify-center text-[10px] transition-colors shrink-0
                     {ep.watched ? 'bg-accent/30 border-accent text-accent' : 'border-zinc-600 text-zinc-600 hover:border-zinc-400'}"
                   onclick={e => { e.stopPropagation(); toggleEpisodeWatched(ep.id); }}
-                  title="Toggle watched"
+                  onkeydown={e => e.stopPropagation()}
+                  title={ep.watched ? 'Mark unwatched' : 'Mark watched'}
+                  aria-label="{ep.watched ? 'Mark unwatched' : 'Mark watched'}: episode {ep.number}"
                 >✓</button>
                 <button
                   class="w-5 h-5 rounded border flex items-center justify-center text-[10px] transition-colors shrink-0
                     {ep.skipped ? 'bg-zinc-700 border-zinc-500 text-zinc-400' : 'border-zinc-700 text-zinc-700 hover:border-zinc-500'}"
                   onclick={e => { e.stopPropagation(); toggleEpisodeSkipped(ep.id); }}
-                  title="Toggle skipped"
+                  onkeydown={e => e.stopPropagation()}
+                  title={ep.skipped ? 'Unskip' : 'Skip'}
+                  aria-label="{ep.skipped ? 'Unskip' : 'Skip'}: episode {ep.number}"
                 >—</button>
               </div>
             </div>

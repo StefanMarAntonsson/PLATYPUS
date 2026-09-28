@@ -1,6 +1,8 @@
 <script lang="ts">
   import type { NotificationKind } from '$lib/notifications.svelte.js';
-  import { notifications, dismiss, dismissAll } from '$lib/notifications.svelte.js';
+  import { notifications, dismiss, dismissAll, pauseAutoDismiss, resumeAutoDismiss } from '$lib/notifications.svelte.js';
+  import { fly, fade } from 'svelte/transition';
+  import { motionDuration } from '$lib/motion.js';
 
   // Per-kind accent: left border + icon color. Neutral zinc card body so these
   // read consistently against the app's dark surfaces.
@@ -17,7 +19,7 @@
     {#if notifications.length > 1}
       <div class="flex justify-end">
         <button
-          class="rounded-md bg-zinc-800/80 px-2.5 py-1 text-xs text-zinc-400 backdrop-blur transition-colors hover:bg-zinc-700 hover:text-zinc-200"
+          class="rounded-md bg-zinc-800 px-2.5 py-1 text-xs text-zinc-400 transition-colors hover:bg-zinc-700 hover:text-zinc-200"
           onclick={dismissAll}
         >Dismiss all ({notifications.length})</button>
       </div>
@@ -27,8 +29,14 @@
       {#each notifications as n (n.id)}
         {@const s = styles[n.kind]}
         <div
-          role="alert"
-          class="flex items-start gap-2.5 rounded-lg border border-border border-l-4 {s.border} bg-surface/95 p-3 shadow-lg backdrop-blur"
+          role={n.kind === 'error' || n.kind === 'warning' ? 'alert' : 'status'}
+          onmouseenter={() => pauseAutoDismiss(n.id)}
+          onmouseleave={() => resumeAutoDismiss(n.id)}
+          onfocusin={() => pauseAutoDismiss(n.id)}
+          onfocusout={() => resumeAutoDismiss(n.id)}
+          in:fly={{ x: 24, duration: motionDuration(180) }}
+          out:fade={{ duration: motionDuration(250) }}
+          class="flex items-start gap-2.5 rounded-lg border border-border border-l-4 {s.border} bg-surface p-3 shadow-lg"
         >
           <span class="mt-0.5 shrink-0 text-sm font-bold {s.icon}" aria-hidden="true">{s.glyph}</span>
           <div class="min-w-0 flex-1">
@@ -37,6 +45,13 @@
               <p class="mt-0.5 break-words text-xs text-zinc-400">{n.message}</p>
             {/if}
           </div>
+          {#if n.action}
+            {@const action = n.action}
+            <button
+              class="shrink-0 rounded px-2 py-1 text-xs font-semibold text-accent transition-colors hover:bg-accent/10"
+              onclick={() => { action.run(); dismiss(n.id); }}
+            >{action.label}</button>
+          {/if}
           <button
             class="-mr-1 -mt-1 shrink-0 rounded p-1 text-zinc-500 transition-colors hover:text-zinc-200"
             title="Dismiss"

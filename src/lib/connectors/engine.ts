@@ -1,5 +1,6 @@
 import Ajv2020 from "ajv/dist/2020.js";
 import { invoke } from "@tauri-apps/api/core";
+import { sleep } from "../api/http.js";
 import schema from "./source-template.schema.json";
 import type {
   CapabilityStatus,
@@ -57,6 +58,17 @@ export function isConnectorUnavailableError(error: unknown): boolean {
 
 function statusMakesConnectionUnavailable(status: number): boolean {
   return [401, 403, 408, 425, 429].includes(status) || status >= 500;
+}
+
+function retryDelayMs(response: Response, attempt: number, backoffMs: number): number {
+  const retryAfter = response.headers.get("Retry-After");
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+    const date = Date.parse(retryAfter);
+    if (Number.isFinite(date)) return Math.max(0, date - Date.now());
+  }
+  return Math.min(backoffMs, 60_000) * 2 ** attempt;
 }
 
 interface NativeConnectorResponse {
@@ -222,6 +234,7 @@ function mapMedia(
   const lifecycle: NormalizedMedia["lifecycle"] = [
     "running",
     "releasing",
+    "current",
     "currently airing",
   ].includes(rawLifecycle)
     ? "releasing"
@@ -231,9 +244,15 @@ function mapMedia(
         ? "cancelled"
         : ["in development", "in production"].includes(rawLifecycle)
           ? "in_production"
-          : ["announced", "to be determined", "not yet aired", "not yet released"].includes(
-                rawLifecycle,
-              )
+          : [
+                "announced",
+                "to be determined",
+                "not yet aired",
+                "not yet released",
+                "upcoming",
+                "unreleased",
+                "tba",
+              ].includes(rawLifecycle)
             ? "announced"
             : rawLifecycle
               ? "unknown"
@@ -402,25 +421,47 @@ export class ConnectorEngine {
     const operation = template.operations[operationName];
     if (!operation) throw new Error(`${template.name} does not support ${operationName}`);
     const secret = await this.authentication(template, connection);
-    const payload = await this.request(
-      template,
-      connection.baseUrl,
-      operation,
-      request.input ?? {},
-      connection.settings,
-      {
-        number:
-          operation.pagination?.type === "page" ? (operation.pagination.start ?? 1) : undefined,
-      },
-      secret,
-      request.signal,
-    );
-    const resultItems = operation.response.resultsPath
-      ? readPath(payload, operation.response.resultsPath)
-      : payload;
-    return (Array.isArray(resultItems) ? resultItems : [resultItems])
-      .filter((item) => item !== undefined)
-      .map((item) => mapRecord(item, operation));
+    const records: Record<string, unknown>[] = [];
+    let page: Record<string, unknown> = {
+      number: operation.pagination?.type === "page" ? (operation.pagination.start ?? 1) : undefined,
+      cursor: undefined,
+    };
+    for (let pageIndex = 0; pageIndex < MAX_PAGES; pageIndex++) {
+      const payload = await this.request(
+        template,
+        connection.baseUrl,
+        operation,
+        request.input ?? {},
+        connection.settings,
+        page,
+        secret,
+        request.signal,
+      );
+      const resultItems = operation.response.resultsPath
+        ? readPath(payload, operation.response.resultsPath)
+        : payload;
+      records.push(
+        ...(Array.isArray(resultItems) ? resultItems : [resultItems])
+          .filter((item) => item !== undefined)
+          .map((item) => mapRecord(item, operation)),
+      );
+      if (!operation.pagination) break;
+      if (operation.pagination.type === "page") {
+        const total = operation.pagination.totalPagesPath
+          ? Number(readPath(payload, operation.pagination.totalPagesPath))
+          : undefined;
+        const hasNext = operation.pagination.hasNextPath
+          ? readPath(payload, operation.pagination.hasNextPath) === true
+          : undefined;
+        if (hasNext !== true && !(Number.isFinite(total) && Number(page.number) < total!)) break;
+        page = { number: Number(page.number) + 1 };
+      } else {
+        const cursor = readPath(payload, operation.pagination.nextCursorPath);
+        if (typeof cursor !== "string" || !cursor) break;
+        page = { cursor };
+      }
+    }
+    return records;
   }
 
   capability(
@@ -566,9 +607,7 @@ export class ConnectorEngine {
         attempt === attempts - 1
       )
         break;
-      await new Promise((resolve) =>
-        setTimeout(resolve, Math.min(operation.retry?.backoffMs ?? 0, 60_000) * 2 ** attempt),
-      );
+      await sleep(retryDelayMs(response, attempt, operation.retry?.backoffMs ?? 0), signal);
     }
     if (!response?.ok) {
       const status = response?.status;

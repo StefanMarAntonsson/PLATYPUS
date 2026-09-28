@@ -1,12 +1,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use rusqlite::{params, Connection, OptionalExtension};
+mod database;
+
+use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 use std::{
     collections::HashMap,
     env, fs,
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::Command,
+    sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Manager};
@@ -127,9 +130,9 @@ fn open_external_url(url: String, browser: String) -> Result<(), String> {
     Ok(())
 }
 
-// Keep the versioned document intact at the repository boundary. The frontend
-// deliberately validates every load through `parseV2Data`, which requires the
-// version and also uses `exportedAt` for portable backup compatibility.
+// Portable backups are complete versioned documents. The frontend validates
+// every load through `parseV2Data`, which requires the version and also uses
+// `exportedAt` for backup compatibility.
 const DATA_AREAS: [&str; 11] = [
     "version",
     "exportedAt",
@@ -153,189 +156,68 @@ fn database_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(directory.join("platypus.sqlite3"))
 }
 
-fn backup_database(path: &Path) -> Result<(), String> {
-    if !path.exists() || fs::metadata(path).map_err(|error| error.to_string())?.len() == 0 {
-        return Ok(());
-    }
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|error| error.to_string())?
-        .as_secs();
-    let backup = path.with_file_name(format!("platypus.sqlite3.pre-migration-{stamp}.bak"));
-    fs::copy(path, backup).map_err(|error| error.to_string())?;
-    Ok(())
-}
+/// The application's single SQLite connection. It is opened, and migrated,
+/// by the first command that needs it; a failed open is retried next time.
+#[derive(Default)]
+struct Database(Mutex<Option<Connection>>);
 
-fn migrate(connection: &mut Connection, path: &Path, database_existed: bool) -> Result<(), String> {
-    connection.execute_batch("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)")
-        .map_err(|error| error.to_string())?;
-    let current: i64 = connection
-        .query_row(
-            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|error| error.to_string())?;
-
-    // Preserve the pre-upgrade file before any schema change, including a
-    // partial upgrade from an earlier PLATYPUS desktop release.
-    if database_existed && current < 3 {
-        backup_database(path)?;
+fn with_database<T>(
+    app: &AppHandle,
+    operation: impl FnOnce(&mut Connection) -> Result<T, String>,
+) -> Result<T, String> {
+    let state = app.state::<Database>();
+    let mut guard = state
+        .0
+        .lock()
+        .map_err(|_| "The library database is unavailable".to_string())?;
+    if guard.is_none() {
+        *guard = Some(database::open(&database_path(app)?)?);
     }
-    if current < 1 {
-        let transaction = connection
-            .transaction()
-            .map_err(|error| error.to_string())?;
-        transaction
-            .execute_batch(
-                "CREATE TABLE IF NOT EXISTS app_data (
-                area TEXT PRIMARY KEY NOT NULL,
-                value_json TEXT NOT NULL,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );",
-            )
-            .map_err(|error| error.to_string())?;
-        transaction.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, CURRENT_TIMESTAMP)",
-            [1],
-        ).map_err(|error| error.to_string())?;
-        transaction.commit().map_err(|error| error.to_string())?;
-    }
-
-    if current < 2 {
-        let transaction = connection
-            .transaction()
-            .map_err(|error| error.to_string())?;
-        // Only opaque identifiers belong here. Actual credential values stay in
-        // platform secret storage when connection support is added.
-        transaction
-            .execute_batch(
-                "CREATE TABLE IF NOT EXISTS secret_references (
-                    id TEXT PRIMARY KEY NOT NULL,
-                    connection_id TEXT NOT NULL,
-                    kind TEXT NOT NULL,
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-                );",
-            )
-            .map_err(|error| error.to_string())?;
-        transaction
-            .execute(
-                "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, CURRENT_TIMESTAMP)",
-                [2],
-            )
-            .map_err(|error| error.to_string())?;
-        transaction.commit().map_err(|error| error.to_string())?;
-    }
-
-    if current < 3 {
-        let transaction = connection
-            .transaction()
-            .map_err(|error| error.to_string())?;
-        transaction
-            .execute_batch(
-                "CREATE TABLE IF NOT EXISTS source_connections (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                data_json TEXT NOT NULL,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );",
-            )
-            .map_err(|error| error.to_string())?;
-        transaction.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, CURRENT_TIMESTAMP)", [3],
-        ).map_err(|error| error.to_string())?;
-        transaction.commit().map_err(|error| error.to_string())?;
-    }
-    Ok(())
-}
-
-fn open_database(app: &AppHandle) -> Result<Connection, String> {
-    let path = database_path(app)?;
-    let database_existed = path.exists();
-    let mut connection = Connection::open(&path).map_err(|error| error.to_string())?;
-    connection
-        .pragma_update(None, "foreign_keys", "ON")
-        .map_err(|error| error.to_string())?;
-    migrate(&mut connection, &path, database_existed)?;
-    Ok(connection)
+    operation(guard.as_mut().expect("database connection was just opened"))
 }
 
 #[tauri::command]
 fn load_app_data(app: AppHandle) -> Result<Option<String>, String> {
-    let connection = open_database(&app)?;
-    let count: i64 = connection
-        .query_row("SELECT COUNT(*) FROM app_data", [], |row| row.get(0))
-        .map_err(|error| error.to_string())?;
-    if count == 0 {
-        return Ok(None);
-    }
-
-    let mut data = serde_json::Map::new();
-    let mut statement = connection
-        .prepare("SELECT area, value_json FROM app_data")
-        .map_err(|error| error.to_string())?;
-    let rows = statement
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })
-        .map_err(|error| error.to_string())?;
-    for row in rows {
-        let (area, value) = row.map_err(|error| error.to_string())?;
-        let value = serde_json::from_str(&value)
-            .map_err(|error| format!("Invalid stored {area} data: {error}"))?;
-        data.insert(area, value);
-    }
-    Ok(Some(serde_json::Value::Object(data).to_string()))
+    with_database(&app, |connection| {
+        Ok(database::load_document(connection)?.map(|document| document.to_string()))
+    })
 }
 
 #[tauri::command]
-fn save_app_data(app: AppHandle, data: String) -> Result<(), String> {
-    let value: serde_json::Value = serde_json::from_str(&data)
-        .map_err(|error| format!("Invalid application data: {error}"))?;
-    let object = value
-        .as_object()
-        .ok_or_else(|| "Application data must be a JSON object".to_string())?;
-    let mut connection = open_database(&app)?;
-    let transaction = connection
-        .transaction()
-        .map_err(|error| error.to_string())?;
-    for area in DATA_AREAS {
-        let area_value = object
-            .get(area)
-            .ok_or_else(|| format!("Application data is missing {area}"))?;
-        transaction.execute(
-            "INSERT INTO app_data (area, value_json, updated_at) VALUES (?1, ?2, CURRENT_TIMESTAMP)
-             ON CONFLICT(area) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at",
-            params![area, area_value.to_string()],
-        ).map_err(|error| error.to_string())?;
-    }
-    transaction.commit().map_err(|error| error.to_string())?;
-    Ok(())
+fn apply_app_data_changes(app: AppHandle, changes: String) -> Result<(), String> {
+    let changes: serde_json::Value =
+        serde_json::from_str(&changes).map_err(|error| format!("Invalid changes: {error}"))?;
+    with_database(&app, |connection| {
+        database::apply_changes(connection, &changes)
+    })
 }
 
 #[tauri::command]
 fn load_sources(app: AppHandle) -> Result<Option<String>, String> {
-    let connection = open_database(&app)?;
-    connection
-        .query_row(
-            "SELECT data_json FROM source_connections WHERE id = 1",
-            [],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|error| error.to_string())
+    with_database(&app, |connection| {
+        connection
+            .query_row(
+                "SELECT data_json FROM source_connections WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())
+    })
 }
 
 #[tauri::command]
 fn save_sources(app: AppHandle, data: String) -> Result<(), String> {
     let _: serde_json::Value =
         serde_json::from_str(&data).map_err(|error| format!("Invalid source data: {error}"))?;
-    let connection = open_database(&app)?;
-    connection.execute(
-        "INSERT INTO source_connections (id, data_json, updated_at) VALUES (1, ?1, CURRENT_TIMESTAMP)
-         ON CONFLICT(id) DO UPDATE SET data_json = excluded.data_json, updated_at = excluded.updated_at",
-        [data],
-    ).map_err(|error| error.to_string())?;
-    Ok(())
+    with_database(&app, |connection| {
+        connection.execute(
+            "INSERT INTO source_connections (id, data_json, updated_at) VALUES (1, ?1, CURRENT_TIMESTAMP)
+             ON CONFLICT(id) DO UPDATE SET data_json = excluded.data_json, updated_at = excluded.updated_at",
+            [data],
+        ).map_err(|error| error.to_string())?;
+        Ok(())
+    })
 }
 
 #[tauri::command]
@@ -473,9 +355,10 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
+        .manage(Database::default())
         .invoke_handler(tauri::generate_handler![
             load_app_data,
-            save_app_data,
+            apply_app_data_changes,
             load_sources,
             save_sources,
             save_backup,

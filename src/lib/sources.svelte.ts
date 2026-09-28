@@ -13,6 +13,7 @@ import type {
   TrackingMode,
 } from "./connectors/contracts.js";
 import { createSourceBundle, parseSourceBundle } from "./connectors/source-bundle.js";
+import { BUILTIN_TEMPLATES, isBuiltinTemplate } from "./connectors/builtin.js";
 
 export interface ConfiguredSource {
   template: SourceTemplateV1;
@@ -30,7 +31,7 @@ export const sourcesState = $state({
 let initialization: Promise<void> | undefined;
 const connectorEngine = new ConnectorEngine();
 
-function withAniListEnglishTitles(template: SourceTemplateV1): SourceTemplateV1 {
+function withAniListCompatibleFields(template: SourceTemplateV1): SourceTemplateV1 {
   if (template.id !== "anilist") return template;
   let changed = false;
   const operations = { ...template.operations };
@@ -38,7 +39,7 @@ function withAniListEnglishTitles(template: SourceTemplateV1): SourceTemplateV1 
   for (const name of ["search", "details"] as const) {
     const operation = operations[name];
     if (!operation || operation.request.protocol !== "graphql") continue;
-    const query = operation.request.query.replace(
+    let query = operation.request.query.replace(
       /title\s*\{([^}]*)\}/,
       (selection, fields: string) => {
         if (/\benglish\b/.test(fields)) return selection;
@@ -46,8 +47,37 @@ function withAniListEnglishTitles(template: SourceTemplateV1): SourceTemplateV1 
         return selection.replace("}", " english }");
       },
     );
+    // Streaming platforms let a sync find new ones, and let a title from
+    // another source borrow them; the start date confirms such a match.
+    const extraFields = [
+      "externalLinks { url site type color }",
+      ...(name === "search" ? ["startDate { year month day }"] : []),
+    ];
+    for (const field of extraFields) {
+      if (new RegExp(`\\b${field.split(" ")[0]}\\b`).test(query)) continue;
+      query = query.replace(/(\b(?:Media|media)\s*(?:\([^)]*\))?\s*\{)/, (opening: string) => {
+        changed = true;
+        return `${opening} ${field}`;
+      });
+    }
+    // AniList can return a null format for an announced title. Its type is
+    // still ANIME, which gives the connector a reliable series identity.
+    query = query.replace(
+      /(\b(?:Media|media)\s*(?:\([^)]*\))?\s*\{)([^{}]*)/,
+      (selection, opening: string, fields: string) => {
+        if (/\btype\b/.test(fields)) return selection;
+        changed = true;
+        return `${opening} type${fields}`;
+      },
+    );
     const mapping = {
       ...operation.response.mapping,
+      streamingLinks: operation.response.mapping.streamingLinks ?? "$.externalLinks",
+      ...(name === "search"
+        ? { startDateParts: operation.response.mapping.startDateParts ?? "$.startDate" }
+        : {}),
+      kind: "$.type",
+      format: operation.response.mapping.format ?? operation.response.mapping.kind,
       titleRomaji: operation.response.mapping.titleRomaji ?? "$.title.romaji",
       titleEnglish: operation.response.mapping.titleEnglish ?? "$.title.english",
       titleNative:
@@ -56,9 +86,13 @@ function withAniListEnglishTitles(template: SourceTemplateV1): SourceTemplateV1 
         "$.title.native",
     };
     if (
+      mapping.kind !== operation.response.mapping.kind ||
+      mapping.format !== operation.response.mapping.format ||
       mapping.titleRomaji !== operation.response.mapping.titleRomaji ||
       mapping.titleEnglish !== operation.response.mapping.titleEnglish ||
-      mapping.titleNative !== operation.response.mapping.titleNative
+      mapping.titleNative !== operation.response.mapping.titleNative ||
+      mapping.streamingLinks !== operation.response.mapping.streamingLinks ||
+      mapping.startDateParts !== operation.response.mapping.startDateParts
     ) {
       changed = true;
     }
@@ -67,6 +101,26 @@ function withAniListEnglishTitles(template: SourceTemplateV1): SourceTemplateV1 
       request: { ...operation.request, query },
       response: { ...operation.response, mapping },
     };
+  }
+
+  const episodes = operations.episodes;
+  if (episodes?.request.protocol === "graphql") {
+    const query = episodes.request.query.replace(
+      /\bairingSchedule\s*\(\s*page\s*:\s*1\s*,\s*perPage\s*:\s*\d+\s*\)\s*\{/,
+      "airingSchedule(page: ${page.number}, perPage: 25) { pageInfo { hasNextPage }",
+    );
+    if (query !== episodes.request.query) {
+      changed = true;
+      operations.episodes = {
+        ...episodes,
+        request: { ...episodes.request, query },
+        pagination: {
+          type: "page",
+          parameter: "page",
+          hasNextPath: "$.data.Media.airingSchedule.pageInfo.hasNextPage",
+        },
+      };
+    }
   }
 
   return changed ? { ...template, operations } : template;
@@ -93,7 +147,7 @@ export function parseConfiguredSources(value: unknown): ConfiguredSource[] {
     } catch {
       return [];
     }
-    const upgradedTemplate = withAniListEnglishTitles(checked.value);
+    const upgradedTemplate = withAniListCompatibleFields(checked.value);
     return [
       {
         template: upgradedTemplate,
@@ -114,6 +168,30 @@ export function parseConfiguredSources(value: unknown): ConfiguredSource[] {
   });
 }
 
+/**
+ * Give every built-in source a connection and keep its template current.
+ * Stored copies of a built-in template are replaced by the app's version; the
+ * connection, including whether the user disabled it, is left alone.
+ */
+export function withBuiltinSources(sources: ConfiguredSource[]): {
+  sources: ConfiguredSource[];
+  changed: boolean;
+} {
+  let changed = false;
+  const upgraded = sources.map((source) => {
+    const builtin = BUILTIN_TEMPLATES.find((template) => template.id === source.template.id);
+    if (!builtin || JSON.stringify(builtin) === JSON.stringify(source.template)) return source;
+    changed = true;
+    return { ...source, template: builtin };
+  });
+  for (const template of BUILTIN_TEMPLATES) {
+    if (upgraded.some((source) => source.template.id === template.id)) continue;
+    changed = true;
+    upgraded.push({ template, connection: newConnection(template) });
+  }
+  return { sources: upgraded, changed };
+}
+
 async function persist() {
   const serialized = JSON.stringify(sourcesState.sources);
   await invoke("save_sources", { data: serialized });
@@ -126,10 +204,13 @@ export async function initSources() {
       try {
         const serialized = await invoke<string | null>("load_sources");
         const parsed = serialized ? JSON.parse(serialized) : [];
-        const configured = parseConfiguredSources(parsed);
-        sourcesState.sources = configured;
+        const configured = withBuiltinSources(parseConfiguredSources(parsed));
+        sourcesState.sources = configured.sources;
+        // Built-ins are recreated on every load, so a failed save only
+        // means doing this again next time.
+        if (configured.changed) await persist().catch(() => undefined);
       } catch {
-        sourcesState.sources = [];
+        sourcesState.sources = withBuiltinSources([]).sources;
       }
       sourcesState.ready = true;
     })();
@@ -157,7 +238,7 @@ export function newConnection(template: SourceTemplateV1, name = template.name):
 export async function addSource(template: SourceTemplateV1, name?: string) {
   const checked = validateSourceTemplate(template);
   if (!checked.valid) throw new Error(checked.errors.map((issue) => issue.message).join("; "));
-  const configuredTemplate = withAniListEnglishTitles(checked.value);
+  const configuredTemplate = withAniListCompatibleFields(checked.value);
   const connection = newConnection(configuredTemplate, name);
   sourcesState.sources = [...sourcesState.sources, { template: configuredTemplate, connection }];
   await persist();
@@ -198,7 +279,7 @@ export async function importSourcesBundle(
       continue;
     }
     existing.add(key);
-    const configuredTemplate = withAniListEnglishTitles(source.template);
+    const configuredTemplate = withAniListCompatibleFields(source.template);
     const connection = newConnection(configuredTemplate, source.connection.name);
     imported.push({
       template: configuredTemplate,
@@ -271,6 +352,10 @@ export async function recordTrackingAudit(connectionId: string, entry: TrackingA
 }
 
 export async function removeSource(connectionId: string) {
+  const source = sourcesState.sources.find((item) => item.connection.id === connectionId);
+  if (source && isBuiltinTemplate(source.template.id)) {
+    throw new Error("Built-in sources can be disabled but not removed.");
+  }
   sourcesState.sources = sourcesState.sources.filter(
     (source) => source.connection.id !== connectionId,
   );
@@ -342,7 +427,7 @@ export async function fetchSourceMediaUpdate(
   let source = sourcesState.sources.find((configured) => configured.connection.id === connectionId);
   if (!source) throw new Error("The media source connection is no longer configured");
   if (!source.connection.enabled) throw new Error(`${source.connection.name} is disabled`);
-  source = { ...source, template: withAniListEnglishTitles(source.template) };
+  source = { ...source, template: withAniListCompatibleFields(source.template) };
 
   const input = { providerId };
   const details = source.template.operations.details
@@ -412,4 +497,54 @@ export async function searchSources(
         }
       }),
   );
+}
+
+/** The enabled connection for a template that supports the given operations. */
+export function enabledSourceForTemplate(
+  templateId: string,
+  operations: Array<keyof SourceTemplateV1["operations"]>,
+): ConfiguredSource | undefined {
+  return sourcesState.sources.find(
+    (source) =>
+      source.template.id === templateId &&
+      source.connection.enabled &&
+      operations.every((operation) => !!source.template.operations[operation]),
+  );
+}
+
+/** Search one configured source. */
+export async function searchSource(
+  source: ConfiguredSource,
+  query: string,
+  signal?: AbortSignal,
+): Promise<NormalizedMedia[]> {
+  return connectorEngine.execute(source.template, source.connection, "search", {
+    input: { query },
+    signal,
+  });
+}
+
+/** Fetch one configured source's details for a provider item. */
+export async function fetchSourceDetails(
+  source: ConfiguredSource,
+  providerId: string,
+  signal?: AbortSignal,
+): Promise<NormalizedMedia | undefined> {
+  const [details] = await connectorEngine.execute(source.template, source.connection, "details", {
+    input: { providerId },
+    signal,
+  });
+  return details;
+}
+
+/** Fetch one configured source's raw episode records for a provider item. */
+export async function fetchEpisodeRecords(
+  source: ConfiguredSource,
+  providerId: string,
+  signal?: AbortSignal,
+): Promise<Record<string, unknown>[]> {
+  return connectorEngine.executeRecords(source.template, source.connection, "episodes", {
+    input: { providerId },
+    signal,
+  });
 }

@@ -6,7 +6,8 @@
   import { onMount } from 'svelte';
   import type { Window as TauriWindow } from '@tauri-apps/api/window';
   import { isTauri } from '@tauri-apps/api/core';
-  import { fs, initFile } from '$lib/store.svelte.js';
+  import { flushPendingSave, fs, initFile } from '$lib/store.svelte.js';
+  import { notify } from '$lib/notifications.svelte.js';
   import NotificationOverlay from '$lib/components/NotificationOverlay.svelte';
   import AppUpdateBanner from '$lib/components/AppUpdateBanner.svelte';
   import { initializeAppUpdates } from '$lib/app-update.svelte.js';
@@ -24,8 +25,7 @@
   const collectionsPageVisible = false;
 
   const navItems = [
-    { href: '/',            label: 'Watchlist'   },
-    { href: '/library',     label: 'Library'     },
+    { href: '/',            label: 'Library'     },
     { href: '/search',      label: 'Search'      },
     ...(collectionsPageVisible ? [{ href: '/collections', label: 'Collections' }] : []),
     { href: '/settings',    label: 'Settings'    },
@@ -37,9 +37,25 @@
     if (!isTauri()) return;
     void initializeAppUpdates();
     // Let the window module finish initializing before its constructor is used.
-    void import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
+    let unlistenClose: (() => void) | undefined;
+    let closeAnyway = false;
+    void import('@tauri-apps/api/window').then(async ({ getCurrentWindow }) => {
       desktopWindow = getCurrentWindow();
+      // Write any edit still waiting in the save debounce before the window
+      // goes away. If that fails, keep the window open once so the user sees
+      // the error; a second close request quits regardless.
+      unlistenClose = await desktopWindow.onCloseRequested(async (event) => {
+        if (closeAnyway) return;
+        try {
+          await flushPendingSave();
+        } catch (error) {
+          closeAnyway = true;
+          event.preventDefault();
+          notify('error', 'Your latest changes could not be saved', `${error instanceof Error ? error.message : error} Close the window again to quit anyway.`);
+        }
+      });
     });
+    return () => unlistenClose?.();
   });
 
   const current = $derived(page.route.id);
@@ -52,7 +68,7 @@
   };
 
   function isActive(href: string): boolean {
-    if (href === '/') return current === '/' || current === '/watchlist';
+    if (href === '/') return current === '/';
     return current === href || current?.startsWith(`${href}/`) === true;
   }
 </script>
@@ -62,7 +78,28 @@
   <title>PLATYPUS</title>
 </svelte:head>
 
-{#if fs.status !== 'ready'}
+{#if fs.status === 'initializing'}
+  <!-- Skeleton of the app shell while the library loads. -->
+  <div class="fixed inset-0 z-[100] flex flex-col bg-[#09090b]" aria-busy="true" aria-label="Loading your library">
+    <div class="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-surface px-4">
+      <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-accent text-sm font-black text-white">P</span>
+      {#each [0, 1, 2, 3] as _}
+        <span class="h-3 w-16 animate-pulse rounded bg-zinc-800"></span>
+      {/each}
+    </div>
+    <div class="grid grid-cols-[repeat(auto-fill,minmax(135px,1fr))] gap-3 p-4 md:p-6">
+      {#each Array.from({ length: 12 }) as _}
+        <div class="overflow-hidden rounded-md border border-border bg-surface-2/40">
+          <div class="aspect-[4/5] animate-pulse bg-zinc-800/70"></div>
+          <div class="space-y-2 p-2">
+            <div class="h-2.5 w-4/5 animate-pulse rounded bg-zinc-800"></div>
+            <div class="h-2 w-1/2 animate-pulse rounded bg-zinc-800"></div>
+          </div>
+        </div>
+      {/each}
+    </div>
+  </div>
+{:else if fs.status === 'error'}
   <div class="fixed inset-0 z-[100] flex items-center justify-center bg-[#09090b] p-6">
     <div class="w-full max-w-sm space-y-6 text-center">
       <div class="flex flex-col items-center gap-3">
@@ -71,25 +108,20 @@
         <h1 class="text-2xl font-black tracking-widest text-white">PLATYPUS</h1>
       </div>
 
-      {#if fs.status === 'initializing'}
-        <p class="text-zinc-500 text-sm animate-pulse">Loading...</p>
-
-      {:else if fs.status === 'error'}
-        <div class="space-y-3">
-          <p class="text-red-400 text-sm">{fs.saveError || 'Something went wrong.'}</p>
-          <button
-            class="w-full py-3 rounded-xl text-sm font-medium bg-zinc-800 hover:bg-zinc-700 text-zinc-200 transition-colors"
-            onclick={initFile}
-          >Retry</button>
-        </div>
-      {/if}
+      <div class="space-y-3">
+        <p class="text-red-400 text-sm">{fs.saveError || 'Something went wrong.'}</p>
+        <button
+          class="w-full py-3 rounded-xl text-sm font-medium bg-zinc-800 hover:bg-zinc-700 text-zinc-200 transition-colors"
+          onclick={initFile}
+        >Retry</button>
+      </div>
     </div>
   </div>
 {/if}
 
 <div class="flex h-screen flex-col overflow-hidden bg-[#09090b]">
   <header data-tauri-drag-region class="flex h-14 shrink-0 select-none items-stretch border-b border-border bg-surface">
-    <a href="{base}/" class="flex shrink-0 items-center gap-2.5 border-r border-border px-3 sm:px-4" aria-label="PLATYPUS Watchlist">
+    <a href="{base}/" class="flex shrink-0 items-center gap-2.5 border-r border-border px-3 sm:px-4" aria-label="PLATYPUS Library">
       <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-accent text-sm font-black text-white shadow-lg">P</span>
       <span class="hidden text-sm font-black tracking-widest text-white xl:inline">PLATYPUS</span>
     </a>
@@ -119,7 +151,7 @@
           class="flex w-11 items-center justify-center text-zinc-500 transition-colors hover:bg-zinc-700/70 hover:text-white"
           title="Minimize"
           aria-label="Minimize window"
-          onclick={() => void desktopWindow.minimize()}
+          onclick={() => void desktopWindow?.minimize()}
         >
           <svg class="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
             <path d="M3 11.5h10" />
@@ -129,7 +161,7 @@
           class="flex w-11 items-center justify-center text-zinc-500 transition-colors hover:bg-zinc-700/70 hover:text-white"
           title="Maximize or restore"
           aria-label="Maximize or restore window"
-          onclick={() => void desktopWindow.toggleMaximize()}
+          onclick={() => void desktopWindow?.toggleMaximize()}
         >
           <svg class="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
             <rect x="3.25" y="3.25" width="9.5" height="9.5" />
@@ -139,7 +171,7 @@
           class="flex w-11 items-center justify-center text-zinc-500 transition-colors hover:bg-red-600 hover:text-white"
           title="Close"
           aria-label="Close window"
-          onclick={() => void desktopWindow.close()}
+          onclick={() => void desktopWindow?.close()}
         >
           <svg class="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
             <path d="m3.5 3.5 9 9m0-9-9 9" />

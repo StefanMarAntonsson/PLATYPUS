@@ -2,9 +2,9 @@
 
 PLATYPUS is a local-first desktop application. Library entries, watch progress, settings, and source connections are stored on the user's device. PLATYPUS does not include telemetry, advertising, analytics, or a PLATYPUS account service.
 
-PLATYPUS ships without API providers or source connections. Network requests to a media provider occur only after the user creates or imports a source connection and then searches, tests, or refreshes data through that connection.
+PLATYPUS includes enabled Kitsu and TVmaze source connections on first launch. Searching, testing a connection, or refreshing a title can contact these providers. A refresh may also consult another enabled source for episode air times or streaming links. The user can disable either built-in source in **Settings → Sources**. Other providers are contacted only after the user adds or imports a connection and uses it.
 
-## Information visible to a configured provider
+## Information visible to a provider
 
 A provider can receive:
 

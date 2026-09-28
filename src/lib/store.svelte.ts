@@ -11,8 +11,12 @@ import type {
   Settings,
   CollectionFilter,
 } from "./types.js";
-import { EMPTY_APP_DATA, parseV2Data } from "./legacy-data.js";
-import { desktopAppDataRepository } from "./repositories.js";
+import { EMPTY_APP_DATA } from "./legacy-data.js";
+import {
+  desktopAppDataRepository,
+  replaceAllChanges,
+  type AppDataChanges,
+} from "./repositories.js";
 import type { NormalizedMedia } from "./connectors/contracts.js";
 import { previewV2Migration, type V2MigrationPreview } from "./v2-migration.js";
 
@@ -35,11 +39,6 @@ export const fs = $state({
   saveError: "",
 });
 
-// Private — not reactive, used to debounce native repository writes.
-let _saveTimer: ReturnType<typeof setTimeout> | undefined;
-let _savePromise: Promise<void> | undefined;
-const DESKTOP_DATA_KEY = "platypus-desktop-bootstrap-data";
-
 function applyData(data: AppData) {
   Object.assign(appData, data);
 }
@@ -55,45 +54,147 @@ export function previewV2Import(text: string): V2MigrationPreview {
  * that write succeeds.
  */
 export async function importV2Data(preview: V2MigrationPreview): Promise<void> {
-  await desktopAppDataRepository.save(preview.data);
+  // The import replaces everything, so edits still waiting to be saved are moot.
+  clearTimeout(_saveTimer);
+  _saveTimer = undefined;
+  _pending = emptyPending();
+  await enqueueWrite(() => desktopAppDataRepository.applyChanges(replaceAllChanges(preview.data)));
   applyData(preview.data);
   fs.status = "ready";
 }
 
-// ─── Persist (debounced) ──────────────────────────────────────────────────────
+// ─── Persist (debounced, record-level) ───────────────────────────────────────
 
-export function persist() {
-  clearTimeout(_saveTimer);
-  _saveTimer = setTimeout(doSave, 200);
+const ID_AREAS = ["media", "episodes", "watchEvents", "library", "collections", "series"] as const;
+type IdArea = (typeof ID_AREAS)[number];
+const ENTRY_AREAS = ["collectionEntries", "seriesEntries"] as const;
+type EntryArea = (typeof ENTRY_AREAS)[number];
+
+/**
+ * The records a mutation touched. Listed IDs are written if the record still
+ * exists and deleted if it does not. Collection and series memberships are
+ * small and have no IDs, so they are saved as a whole area.
+ */
+export type ChangeMarks = { [A in IdArea]?: Iterable<number> } & {
+  [A in EntryArea]?: boolean;
+} & { settings?: boolean };
+
+interface PendingChanges {
+  ids: Record<IdArea, Set<number>>;
+  entryAreas: Set<EntryArea>;
+  settings: boolean;
 }
 
-async function doSave() {
-  _saveTimer = undefined;
-  fs.isSaving = true;
-  fs.saveError = "";
-  const save = desktopAppDataRepository.save(appData);
-  _savePromise = save;
-  await save
-    .then(() => {
-      fs.saveError = "";
-    })
-    .catch((e: unknown) => {
-      fs.saveError = e instanceof Error ? e.message : "Save failed";
-    });
-  if (_savePromise === save) {
-    _savePromise = undefined;
-    fs.isSaving = false;
+function emptyPending(): PendingChanges {
+  return {
+    ids: {
+      media: new Set(),
+      episodes: new Set(),
+      watchEvents: new Set(),
+      library: new Set(),
+      collections: new Set(),
+      series: new Set(),
+    },
+    entryAreas: new Set(),
+    settings: false,
+  };
+}
+
+// Private — not reactive, used to debounce and serialize native writes.
+let _pending = emptyPending();
+let _saveTimer: ReturnType<typeof setTimeout> | undefined;
+let _writeQueue: Promise<void> = Promise.resolve();
+let _queuedWrites = 0;
+
+function mark(pending: PendingChanges, changes: ChangeMarks) {
+  for (const area of ID_AREAS) {
+    for (const id of changes[area] ?? []) pending.ids[area].add(id);
   }
+  for (const area of ENTRY_AREAS) {
+    if (changes[area]) pending.entryAreas.add(area);
+  }
+  if (changes.settings) pending.settings = true;
 }
 
-/** Finish any queued native write before an updater-triggered restart. */
+/** Record which data changed and schedule a save of just those records. */
+export function persist(changes: ChangeMarks) {
+  mark(_pending, changes);
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(() => void doSave(), 200);
+}
+
+function buildChanges(pending: PendingChanges): AppDataChanges | null {
+  const changes: AppDataChanges = {};
+  let empty = true;
+  for (const area of ID_AREAS) {
+    const ids = pending.ids[area];
+    if (ids.size === 0) continue;
+    const found = new Set<number>();
+    const upserts: unknown[] = [];
+    for (const record of appData[area] as Array<{ id: number }>) {
+      if (!ids.has(record.id)) continue;
+      found.add(record.id);
+      upserts.push($state.snapshot(record));
+    }
+    const deletes = [...ids].filter((id) => !found.has(id));
+    if (upserts.length) (changes.upsert ??= {})[area] = upserts as never;
+    if (deletes.length) (changes.delete ??= {})[area] = deletes;
+    empty = false;
+  }
+  for (const area of pending.entryAreas) {
+    (changes.replace ??= {})[area] = $state.snapshot(appData[area]) as never;
+    empty = false;
+  }
+  if (pending.settings) {
+    changes.settings = $state.snapshot(appData.settings);
+    empty = false;
+  }
+  return empty ? null : changes;
+}
+
+/** Run native writes one at a time, in the order they were requested. */
+function enqueueWrite(write: () => Promise<void>): Promise<void> {
+  _queuedWrites++;
+  fs.isSaving = true;
+  const result = _writeQueue.then(write);
+  _writeQueue = result
+    .catch(() => undefined)
+    .finally(() => {
+      if (--_queuedWrites === 0) fs.isSaving = false;
+    });
+  return result;
+}
+
+function doSave(): Promise<void> {
+  _saveTimer = undefined;
+  const pending = _pending;
+  _pending = emptyPending();
+  // Copy the records now; edits made while this write runs join the next one.
+  const changes = buildChanges(pending);
+  if (!changes) return _writeQueue;
+  return enqueueWrite(() => desktopAppDataRepository.applyChanges(changes)).then(
+    () => {
+      fs.saveError = "";
+    },
+    (e: unknown) => {
+      fs.saveError = e instanceof Error ? e.message : "Save failed";
+      // Keep the failed records queued so the next save retries them.
+      mark(_pending, {
+        ...Object.fromEntries(ID_AREAS.map((area) => [area, pending.ids[area]])),
+        ...Object.fromEntries([...pending.entryAreas].map((area) => [area, true])),
+        settings: pending.settings,
+      });
+    },
+  );
+}
+
+/** Finish any queued native write, e.g. before a restart or window close. */
 export async function flushPendingSave(): Promise<void> {
   if (_saveTimer !== undefined) {
     clearTimeout(_saveTimer);
     await doSave();
-  } else if (_savePromise) {
-    await _savePromise.catch(() => undefined);
   }
+  await _writeQueue;
 
   if (fs.saveError) {
     throw new Error(`PLATYPUS could not save your library: ${fs.saveError}`);
@@ -106,19 +207,7 @@ export async function initFile(): Promise<void> {
   if (typeof window === "undefined") return;
   try {
     const saved = await desktopAppDataRepository.load();
-    if (saved) {
-      applyData(saved);
-    } else {
-      // One-time migration for Phase 2 desktop builds. The old browser-store
-      // value remains intact unless the transactional SQLite write succeeds.
-      const legacySaved = localStorage.getItem(DESKTOP_DATA_KEY);
-      if (legacySaved) {
-        const legacyData = parseV2Data(legacySaved);
-        await desktopAppDataRepository.save(legacyData);
-        applyData(legacyData);
-        localStorage.removeItem(DESKTOP_DATA_KEY);
-      }
-    }
+    if (saved) applyData(saved);
     fs.fileName = "PLATYPUS SQLite library";
     fs.status = "ready";
   } catch (e) {
@@ -129,8 +218,19 @@ export async function initFile(): Promise<void> {
 
 // ─── ID helper ────────────────────────────────────────────────────────────────
 
+// Loops instead of Math.max(...array): spreading a very large array into call
+// arguments is slow and can overflow the engine's argument limit.
+function maxOf<T>(arr: T[], value: (item: T) => number, initial: number): number {
+  let max = initial;
+  for (const item of arr) {
+    const v = value(item);
+    if (v > max) max = v;
+  }
+  return max;
+}
+
 function nextId<T extends { id: number }>(arr: T[]): number {
-  return arr.length > 0 ? Math.max(...arr.map((x) => x.id)) + 1 : 1;
+  return maxOf(arr, (x) => x.id, 0) + 1;
 }
 
 // Provider records from the legacy application use positive provider IDs. Keep
@@ -138,8 +238,7 @@ function nextId<T extends { id: number }>(arr: T[]): number {
 // migration lands, so adding an item manually can never overwrite a later
 // imported provider record with the same number.
 function nextLocalId<T extends { id: number }>(arr: T[]): number {
-  const localIds = arr.map((item) => item.id).filter((id) => id < 0);
-  return localIds.length > 0 ? Math.min(...localIds) - 1 : -1;
+  return -maxOf(arr, (item) => -item.id, 0) - 1;
 }
 
 // ─── Media ────────────────────────────────────────────────────────────────────
@@ -148,7 +247,7 @@ export function upsertMedia(media: Media) {
   const idx = appData.media.findIndex((m) => m.id === media.id);
   if (idx >= 0) appData.media[idx] = media;
   else appData.media.push(media);
-  persist();
+  persist({ media: [media.id] });
 }
 
 export function getMedia(id: number): Media | undefined {
@@ -193,7 +292,7 @@ export function createManualMedia(input: ManualMediaInput): Media {
   };
   appData.media.push(media);
   addToLibrary(media.id);
-  persist();
+  persist({ media: [media.id] });
   return media;
 }
 
@@ -233,9 +332,14 @@ export function createMediaFromSource(
         ? "RELEASING"
         : source.lifecycle === "cancelled"
           ? "CANCELLED"
-          : "FINISHED",
+          : source.lifecycle === "announced" || source.lifecycle === "in_production"
+            ? "NOT_YET_RELEASED"
+            : "FINISHED",
     format: source.kind === "movie" ? "MOVIE" : "TV",
-    totalEpisodes: null,
+    totalEpisodes:
+      Number.isInteger(source.episodeCount) && (source.episodeCount as number) > 0
+        ? (source.episodeCount as number)
+        : null,
     airedEpisodes: source.kind === "movie" ? 1 : 0,
     nextAiringEpisode: null,
     nextAiringAt: null,
@@ -268,7 +372,7 @@ export function createMediaFromSource(
   };
   appData.media.push(media);
   addToLibrary(media.id);
-  persist();
+  persist({ media: [media.id] });
   return media;
 }
 
@@ -314,7 +418,7 @@ export function attachSourceToMedia(
     ];
   }
 
-  persist();
+  persist({ media: [media.id] });
   return media;
 }
 
@@ -333,7 +437,7 @@ export function updateManualMedia(
     seasonYear: updates.year ?? null,
     description: updates.description?.trim() || null,
   });
-  persist();
+  persist({ media: [media.id] });
 }
 
 /** Add an episode to a manually-created series. Episode IDs use the same local namespace. */
@@ -344,7 +448,7 @@ export function createManualEpisode(mediaId: number, title?: string): Episode | 
   const episode: Episode = {
     id: nextLocalId(appData.episodes),
     mediaId,
-    number: existing.length > 0 ? Math.max(...existing.map((item) => item.number)) + 1 : 1,
+    number: maxOf(existing, (item) => item.number, 0) + 1,
     title: title?.trim() || null,
     airingAt: null,
     aired: true,
@@ -359,7 +463,7 @@ export function createManualEpisode(mediaId: number, title?: string): Episode | 
   if (media.totalEpisodes !== null)
     media.totalEpisodes = Math.max(media.totalEpisodes, episode.number);
   media.airedEpisodes = Math.max(media.airedEpisodes, episode.number);
-  persist();
+  persist({ media: [mediaId], episodes: [episode.id] });
   return episode;
 }
 
@@ -374,9 +478,12 @@ export function setMovieWatched(mediaId: number, watched: boolean) {
   const eventIndex = appData.watchEvents.findIndex(
     (event) => event.mediaId === mediaId && event.episodeId === null,
   );
+  const changedEvents: number[] = [];
   if (watched && eventIndex < 0) {
+    const id = nextId(appData.watchEvents);
+    changedEvents.push(id);
     appData.watchEvents.push({
-      id: nextId(appData.watchEvents),
+      id,
       mediaId,
       episodeId: null,
       watchedAt: Date.now(),
@@ -384,6 +491,7 @@ export function setMovieWatched(mediaId: number, watched: boolean) {
       origin: "manual",
     });
   } else if (!watched && eventIndex >= 0) {
+    changedEvents.push(appData.watchEvents[eventIndex].id);
     appData.watchEvents.splice(eventIndex, 1);
   }
   const entry = getLibraryEntry(mediaId);
@@ -392,73 +500,129 @@ export function setMovieWatched(mediaId: number, watched: boolean) {
       status: watched ? "COMPLETED" : "PLAN_TO_WATCH",
       completedAt: watched ? Date.now() : null,
     });
-  persist();
+  persist({ watchEvents: changedEvents });
 }
 
 // ─── Episodes ─────────────────────────────────────────────────────────────────
 
-export function upsertEpisodes(incoming: Episode[]) {
-  for (const ep of incoming) {
-    const matchingIndexes = appData.episodes.flatMap((existing, index) =>
-      existing.id === ep.id ||
-      (existing.mediaId === ep.mediaId && existing.number === ep.number) ||
-      ep.providerLinks?.some((incomingLink) =>
-        existing.providerLinks?.some(
-          (existingLink) =>
-            existingLink.connectionId === incomingLink.connectionId &&
-            existingLink.providerId === incomingLink.providerId,
-        ),
-      )
-        ? [index]
-        : [],
-    );
+type ProviderLink = NonNullable<Episode["providerLinks"]>[number];
 
-    if (matchingIndexes.length > 0) {
-      const matches = matchingIndexes.map((index) => appData.episodes[index]);
-      const watchedMatch = matches.find((episode) => episode.watched);
-      const skippedMatch = matches.find((episode) => episode.skipped);
-      const identityMatch = matches.find((episode) =>
-        ep.providerLinks?.some((incomingLink) =>
-          episode.providerLinks?.some(
-            (existingLink) =>
-              existingLink.connectionId === incomingLink.connectionId &&
-              existingLink.providerId === incomingLink.providerId,
-          ),
-        ),
-      );
-      const canonical = watchedMatch ?? skippedMatch ?? identityMatch ?? matches[0];
-      const canonicalIndex = appData.episodes.indexOf(canonical);
-      const watched = !!watchedMatch;
-      appData.episodes[canonicalIndex] = {
-        ...ep,
-        id: canonical.id,
-        title: ep.title ?? matches.find((episode) => episode.title)?.title ?? null,
-        thumbnail: ep.thumbnail ?? matches.find((episode) => episode.thumbnail)?.thumbnail ?? null,
-        watched,
-        skipped: !watched && !!skippedMatch,
-        watchedAt: watched ? (watchedMatch?.watchedAt ?? Date.now()) : null,
-      };
+const numberKey = (episode: Pick<Episode, "mediaId" | "number">) =>
+  `${episode.mediaId}:${episode.number}`;
+const providerKey = (link: ProviderLink) => `${link.connectionId}\u0000${link.providerId}`;
 
-      const duplicateIds = new Set(
-        matches.filter((episode) => episode.id !== canonical.id).map((episode) => episode.id),
-      );
-      if (duplicateIds.size > 0) {
-        for (const event of appData.watchEvents) {
-          if (event.episodeId !== null && duplicateIds.has(event.episodeId)) {
-            event.episodeId = canonical.id;
-          }
-        }
-        for (const index of matchingIndexes.sort((a, b) => b - a)) {
-          if (index !== canonicalIndex) appData.episodes.splice(index, 1);
-        }
-      }
-    } else {
-      appData.episodes.push(ep);
-    }
-  }
-  persist();
+function sharesProviderLink(a: Episode, b: Episode): boolean {
+  return !!a.providerLinks?.some((incomingLink) =>
+    b.providerLinks?.some(
+      (existingLink) =>
+        existingLink.connectionId === incomingLink.connectionId &&
+        existingLink.providerId === incomingLink.providerId,
+    ),
+  );
 }
 
+/**
+ * Merge synced episodes into the library. Episodes match an existing record by
+ * ID, by media and episode number, or by a shared provider identity; several
+ * matches are collapsed into one record that keeps the user's watch state.
+ */
+export function upsertEpisodes(incoming: Episode[]) {
+  if (incoming.length === 0) return;
+
+  // Work on plain records with lookup tables built once. Searching the
+  // reactive array for every incoming episode made each sync O(stored × new).
+  const slots: Array<Episode | null> = $state.snapshot(appData.episodes) as Episode[];
+  const byId = new Map<number, number>();
+  const byNumber = new Map<string, Set<number>>();
+  const byProvider = new Map<string, Set<number>>();
+  const addToIndex = (map: Map<string, Set<number>>, key: string, index: number) => {
+    const indexes = map.get(key);
+    if (indexes) indexes.add(index);
+    else map.set(key, new Set([index]));
+  };
+  const index = (episode: Episode, slot: number) => {
+    byId.set(episode.id, slot);
+    addToIndex(byNumber, numberKey(episode), slot);
+    for (const link of episode.providerLinks ?? []) addToIndex(byProvider, providerKey(link), slot);
+  };
+  slots.forEach((episode, slot) => episode && index(episode, slot));
+  const changedEpisodes = new Set<number>();
+  const changedEvents = new Set<number>();
+
+  for (const ep of incoming) {
+    // Index entries can go stale as records are replaced, so every candidate
+    // is re-checked against the record currently in its slot.
+    const candidates = new Set<number>();
+    const idSlot = byId.get(ep.id);
+    if (idSlot !== undefined) candidates.add(idSlot);
+    for (const slot of byNumber.get(numberKey(ep)) ?? []) candidates.add(slot);
+    for (const link of ep.providerLinks ?? []) {
+      for (const slot of byProvider.get(providerKey(link)) ?? []) candidates.add(slot);
+    }
+    const matchingIndexes = [...candidates]
+      .filter((slot) => {
+        const existing = slots[slot];
+        return (
+          !!existing &&
+          (existing.id === ep.id ||
+            (existing.mediaId === ep.mediaId && existing.number === ep.number) ||
+            sharesProviderLink(ep, existing))
+        );
+      })
+      .sort((a, b) => a - b);
+
+    if (matchingIndexes.length === 0) {
+      slots.push(ep);
+      index(ep, slots.length - 1);
+      changedEpisodes.add(ep.id);
+      continue;
+    }
+
+    const matches = matchingIndexes.map((slot) => slots[slot] as Episode);
+    const watchedMatch = matches.find((episode) => episode.watched);
+    const skippedMatch = matches.find((episode) => episode.skipped);
+    const identityMatch = matches.find((episode) => sharesProviderLink(ep, episode));
+    const canonical = watchedMatch ?? skippedMatch ?? identityMatch ?? matches[0];
+    const canonicalIndex = matchingIndexes[matches.indexOf(canonical)];
+    const watched = !!watchedMatch;
+    const merged: Episode = {
+      ...ep,
+      id: canonical.id,
+      title: ep.title ?? matches.find((episode) => episode.title)?.title ?? null,
+      thumbnail: ep.thumbnail ?? matches.find((episode) => episode.thumbnail)?.thumbnail ?? null,
+      watched,
+      skipped: !watched && !!skippedMatch,
+      watchedAt: watched ? (watchedMatch?.watchedAt ?? Date.now()) : null,
+    };
+    slots[canonicalIndex] = merged;
+    index(merged, canonicalIndex);
+    changedEpisodes.add(merged.id);
+
+    const duplicateIds = new Set<number>();
+    for (const [position, slot] of matchingIndexes.entries()) {
+      if (slot === canonicalIndex) continue;
+      duplicateIds.add(matches[position].id);
+      changedEpisodes.add(matches[position].id);
+      slots[slot] = null;
+    }
+    if (duplicateIds.size > 0) {
+      for (const event of appData.watchEvents) {
+        if (event.episodeId !== null && duplicateIds.has(event.episodeId)) {
+          event.episodeId = canonical.id;
+          changedEvents.add(event.id);
+        }
+      }
+    }
+  }
+
+  appData.episodes = slots.filter((episode): episode is Episode => episode !== null);
+  persist({ episodes: changedEpisodes, watchEvents: changedEvents });
+}
+
+/**
+ * Re-derive a title's status after the user changed its episode states, and
+ * record the change so "recently updated" sorting reflects watch activity.
+ */
 export function autoUpdateLibraryStatus(mediaId: number) {
   const entryIndex = appData.library.findIndex((l) => l.mediaId === mediaId);
   if (entryIndex < 0) return;
@@ -481,15 +645,14 @@ export function autoUpdateLibraryStatus(mediaId: number) {
       : done >= aired.length && fullyAired
         ? "COMPLETED"
         : "WATCHING";
-  if (entry.status !== newStatus) {
-    // Replacing the record also invalidates consumers that derive a filtered
-    // list from the library array, such as the virtualized completed grid.
-    appData.library[entryIndex] = {
-      ...entry,
-      status: newStatus,
-      updatedAt: Date.now(),
-    };
-  }
+  // Replacing the record also invalidates consumers that derive a filtered
+  // or sorted list from the library array.
+  appData.library[entryIndex] = {
+    ...entry,
+    status: newStatus,
+    updatedAt: Date.now(),
+  };
+  persist({ library: [entry.id] });
 }
 
 export function setEpisodeState(episodeId: number, state: "unwatched" | "watched" | "skipped") {
@@ -503,9 +666,12 @@ export function setEpisodeState(episodeId: number, state: "unwatched" | "watched
   };
   appData.episodes[episodeIndex] = ep;
   const eventIndex = appData.watchEvents.findIndex((event) => event.episodeId === episodeId);
+  const changedEvents: number[] = [];
   if (state === "watched" && eventIndex < 0) {
+    const id = nextId(appData.watchEvents);
+    changedEvents.push(id);
     appData.watchEvents.push({
-      id: nextId(appData.watchEvents),
+      id,
       mediaId: ep.mediaId,
       episodeId,
       watchedAt: ep.watchedAt ?? Date.now(),
@@ -513,18 +679,30 @@ export function setEpisodeState(episodeId: number, state: "unwatched" | "watched
       origin: "manual",
     });
   } else if (state !== "watched" && eventIndex >= 0) {
+    changedEvents.push(appData.watchEvents[eventIndex].id);
     appData.watchEvents.splice(eventIndex, 1);
   }
   autoUpdateLibraryStatus(ep.mediaId);
-  persist();
+  persist({ episodes: [episodeId], watchEvents: changedEvents });
 }
 
-export function cycleEpisodeState(episodeId: number) {
-  const ep = appData.episodes.find((e) => e.id === episodeId);
-  if (!ep) return;
-  if (!ep.watched && !ep.skipped) setEpisodeState(episodeId, "watched");
-  else if (ep.watched) setEpisodeState(episodeId, "skipped");
-  else setEpisodeState(episodeId, "unwatched");
+/** The earliest aired episode of a title that is neither watched nor skipped. */
+export function nextEpisodeToWatch(mediaId: number): Episode | undefined {
+  let next: Episode | undefined;
+  for (const episode of appData.episodes) {
+    if (episode.mediaId !== mediaId || !episode.aired || episode.watched || episode.skipped) {
+      continue;
+    }
+    if (!next || episode.number < next.number) next = episode;
+  }
+  return next;
+}
+
+/** Mark the next episode watched and return it, or undefined when caught up. */
+export function markNextEpisodeWatched(mediaId: number): Episode | undefined {
+  const next = nextEpisodeToWatch(mediaId);
+  if (next) setEpisodeState(next.id, "watched");
+  return next;
 }
 
 export function toggleEpisodeWatched(episodeId: number) {
@@ -541,13 +719,19 @@ export function toggleEpisodeSkipped(episodeId: number) {
 
 export function markAllWatched(mediaId: number) {
   const watchedAt = Date.now();
+  const episodesWithEvents = new Set(appData.watchEvents.map((event) => event.episodeId));
+  let eventId = nextId(appData.watchEvents);
+  const changedEpisodes: number[] = [];
+  const changedEvents: number[] = [];
   for (const ep of appData.episodes.filter((e) => e.mediaId === mediaId)) {
     ep.watched = true;
     ep.skipped = false;
     ep.watchedAt = ep.watchedAt ?? watchedAt;
-    if (!appData.watchEvents.some((event) => event.episodeId === ep.id)) {
+    changedEpisodes.push(ep.id);
+    if (!episodesWithEvents.has(ep.id)) {
+      changedEvents.push(eventId);
       appData.watchEvents.push({
-        id: nextId(appData.watchEvents),
+        id: eventId++,
         mediaId,
         episodeId: ep.id,
         watchedAt: ep.watchedAt,
@@ -557,33 +741,34 @@ export function markAllWatched(mediaId: number) {
     }
   }
   autoUpdateLibraryStatus(mediaId);
-  persist();
+  persist({ episodes: changedEpisodes, watchEvents: changedEvents });
+}
+
+/** Clear every episode's watch state for a title, optionally marking them skipped. */
+function resetAllEpisodes(mediaId: number, skipped: boolean) {
+  const changedEpisodes: number[] = [];
+  for (const ep of appData.episodes.filter((e) => e.mediaId === mediaId)) {
+    ep.skipped = skipped;
+    ep.watched = false;
+    ep.watchedAt = null;
+    changedEpisodes.push(ep.id);
+  }
+  const removedEvents: number[] = [];
+  appData.watchEvents = appData.watchEvents.filter((event) => {
+    const keep = event.mediaId !== mediaId || event.episodeId === null;
+    if (!keep) removedEvents.push(event.id);
+    return keep;
+  });
+  autoUpdateLibraryStatus(mediaId);
+  persist({ episodes: changedEpisodes, watchEvents: removedEvents });
 }
 
 export function skipAllEpisodes(mediaId: number) {
-  for (const ep of appData.episodes.filter((e) => e.mediaId === mediaId)) {
-    ep.skipped = true;
-    ep.watched = false;
-    ep.watchedAt = null;
-  }
-  appData.watchEvents = appData.watchEvents.filter(
-    (event) => event.mediaId !== mediaId || event.episodeId === null,
-  );
-  autoUpdateLibraryStatus(mediaId);
-  persist();
+  resetAllEpisodes(mediaId, true);
 }
 
 export function clearAllWatched(mediaId: number) {
-  for (const ep of appData.episodes.filter((e) => e.mediaId === mediaId)) {
-    ep.watched = false;
-    ep.skipped = false;
-    ep.watchedAt = null;
-  }
-  appData.watchEvents = appData.watchEvents.filter(
-    (event) => event.mediaId !== mediaId || event.episodeId === null,
-  );
-  autoUpdateLibraryStatus(mediaId);
-  persist();
+  resetAllEpisodes(mediaId, false);
 }
 
 // ─── Library ──────────────────────────────────────────────────────────────────
@@ -606,7 +791,7 @@ export function addToLibrary(
     updatedAt: Date.now(),
   };
   appData.library.push(entry);
-  persist();
+  persist({ library: [entry.id] });
   return entry;
 }
 
@@ -617,13 +802,14 @@ export function updateLibraryEntry(
   const entry = appData.library.find((l) => l.id === id);
   if (!entry) return;
   Object.assign(entry, updates, { updatedAt: Date.now() });
-  persist();
+  persist({ library: [entry.id] });
 }
 
 export function removeFromLibrary(mediaId: number) {
   const idx = appData.library.findIndex((l) => l.mediaId === mediaId);
-  if (idx >= 0) appData.library.splice(idx, 1);
-  persist();
+  if (idx < 0) return;
+  const [removed] = appData.library.splice(idx, 1);
+  persist({ library: [removed.id] });
 }
 
 export function getLibraryEntry(mediaId: number): LibraryEntry | undefined {
@@ -642,7 +828,7 @@ export function createCollection(name: string): Collection {
     createdAt: Date.now(),
   };
   appData.collections.push(collection);
-  persist();
+  persist({ collections: [collection.id] });
   return collection;
 }
 
@@ -653,7 +839,7 @@ export function updateCollection(
   const c = appData.collections.find((c) => c.id === id);
   if (!c) return;
   Object.assign(c, updates);
-  persist();
+  persist({ collections: [id] });
 }
 
 export function deleteCollection(id: number) {
@@ -663,7 +849,7 @@ export function deleteCollection(id: number) {
   while (i--) {
     if (appData.collectionEntries[i].collectionId === id) appData.collectionEntries.splice(i, 1);
   }
-  persist();
+  persist({ collections: [id], collectionEntries: true });
 }
 
 export function addMediaToCollection(collectionId: number, mediaId: number) {
@@ -671,12 +857,13 @@ export function addMediaToCollection(collectionId: number, mediaId: number) {
     appData.collectionEntries.find((e) => e.collectionId === collectionId && e.mediaId === mediaId)
   )
     return;
-  const maxOrder = Math.max(
+  const maxOrder = maxOf(
+    appData.collectionEntries.filter((e) => e.collectionId === collectionId),
+    (e) => e.order,
     0,
-    ...appData.collectionEntries.filter((e) => e.collectionId === collectionId).map((e) => e.order),
   );
   appData.collectionEntries.push({ collectionId, mediaId, order: maxOrder + 1 });
-  persist();
+  persist({ collectionEntries: true });
 }
 
 export function removeMediaFromCollection(collectionId: number, mediaId: number) {
@@ -684,7 +871,7 @@ export function removeMediaFromCollection(collectionId: number, mediaId: number)
     (e) => e.collectionId === collectionId && e.mediaId === mediaId,
   );
   if (idx >= 0) appData.collectionEntries.splice(idx, 1);
-  persist();
+  persist({ collectionEntries: true });
 }
 
 export function getCollectionMedia(collectionId: number): Media[] {
@@ -707,7 +894,7 @@ export function createSeries(name: string): Series {
     createdAt: Date.now(),
   };
   appData.series.push(s);
-  persist();
+  persist({ series: [s.id] });
   return s;
 }
 
@@ -715,7 +902,7 @@ export function updateSeries(id: number, updates: Partial<Omit<Series, "id" | "c
   const s = appData.series.find((s) => s.id === id);
   if (!s) return;
   Object.assign(s, updates);
-  persist();
+  persist({ series: [id] });
 }
 
 export function deleteSeries(id: number) {
@@ -725,17 +912,18 @@ export function deleteSeries(id: number) {
   while (i--) {
     if (appData.seriesEntries[i].seriesId === id) appData.seriesEntries.splice(i, 1);
   }
-  persist();
+  persist({ series: [id], seriesEntries: true });
 }
 
 export function addMediaToSeries(seriesId: number, mediaId: number) {
   if (appData.seriesEntries.find((e) => e.seriesId === seriesId && e.mediaId === mediaId)) return;
-  const maxOrder = Math.max(
+  const maxOrder = maxOf(
+    appData.seriesEntries.filter((e) => e.seriesId === seriesId),
+    (e) => e.order,
     0,
-    ...appData.seriesEntries.filter((e) => e.seriesId === seriesId).map((e) => e.order),
   );
   appData.seriesEntries.push({ seriesId, mediaId, order: maxOrder + 1 });
-  persist();
+  persist({ seriesEntries: true });
 }
 
 export function removeMediaFromSeries(seriesId: number, mediaId: number) {
@@ -743,7 +931,7 @@ export function removeMediaFromSeries(seriesId: number, mediaId: number) {
     (e) => e.seriesId === seriesId && e.mediaId === mediaId,
   );
   if (idx >= 0) appData.seriesEntries.splice(idx, 1);
-  persist();
+  persist({ seriesEntries: true });
 }
 
 export function getSeriesMedia(seriesId: number): Media[] {
@@ -758,10 +946,10 @@ export function getSeriesMedia(seriesId: number): Media[] {
 
 export function updateSettings(updates: Partial<Settings>) {
   Object.assign(appData.settings, updates);
-  persist();
+  persist({ settings: true });
 }
 
 export function reorderFilters(order: CollectionFilter[]) {
   appData.settings.filterOrder = order;
-  persist();
+  persist({ settings: true });
 }

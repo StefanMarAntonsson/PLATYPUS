@@ -185,6 +185,52 @@ describe("connector engine", () => {
     expect(isConnectorUnavailableError(error)).toBe(true);
   });
 
+  test("waits for Retry-After before retrying a rate-limited source", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetcher = vi
+        .fn()
+        .mockResolvedValueOnce(new Response(null, { status: 429, headers: { "Retry-After": "2" } }))
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              results: [{ id: "7", media_type: "TV", name: "Seven" }],
+              pages: 1,
+            }),
+            { status: 200 },
+          ),
+        );
+      const engine = new ConnectorEngine({ fetch: fetcher, resolveSecret: async () => "secret" });
+      const pending = engine.execute(template, connection, "search", { input: { query: "seven" } });
+
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(pending).resolves.toHaveLength(1);
+      expect(fetcher).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("cancels a Retry-After wait without making another request", async () => {
+    const controller = new AbortController();
+    const fetcher = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 429, headers: { "Retry-After": "60" } }));
+    const engine = new ConnectorEngine({ fetch: fetcher, resolveSecret: async () => "secret" });
+    const pending = engine.execute(template, connection, "search", {
+      input: { query: "seven" },
+      signal: controller.signal,
+    });
+
+    while (fetcher.mock.calls.length === 0) await Promise.resolve();
+    controller.abort(new Error("Cancelled"));
+
+    await expect(pending).rejects.toThrow("Cancelled");
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
   test("returns one unmodified payload for source-builder previews", async () => {
     const payload = { results: [{ id: "7", media_type: "movie", name: "Seven" }] };
     const engine = new ConnectorEngine({
@@ -224,5 +270,44 @@ describe("connector engine", () => {
     await expect(engine.executeRecords(historyTemplate, connection, "history")).resolves.toEqual([
       { remoteEventId: "event-1", providerId: "7", watchedAt: "2026-01-01T00:00:00Z" },
     ]);
+  });
+
+  test("collects every page of episode records", async () => {
+    const paged = structuredClone(template);
+    paged.operations.episodes = {
+      request: {
+        protocol: "rest",
+        method: "GET",
+        path: "/episodes",
+        query: { page: "${page.number}" },
+      },
+      response: {
+        resultsPath: "$.episodes",
+        mapping: { providerId: "$.id", episodeNumber: "$.number" },
+      },
+      pagination: { type: "page", parameter: "page", hasNextPath: "$.hasNext" },
+    };
+    const pages: number[] = [];
+    const engine = new ConnectorEngine({
+      fetch: async (url) => {
+        const page = Number(new URL(url).searchParams.get("page"));
+        pages.push(page);
+        return new Response(
+          JSON.stringify({
+            episodes: [{ id: `episode-${page}`, number: 1172 + page }],
+            hasNext: page < 3,
+          }),
+          { status: 200 },
+        );
+      },
+      resolveSecret: async () => "secret",
+    });
+
+    await expect(engine.executeRecords(paged, connection, "episodes")).resolves.toEqual([
+      { providerId: "episode-1", episodeNumber: 1173 },
+      { providerId: "episode-2", episodeNumber: 1174 },
+      { providerId: "episode-3", episodeNumber: 1175 },
+    ]);
+    expect(pages).toEqual([1, 2, 3]);
   });
 });

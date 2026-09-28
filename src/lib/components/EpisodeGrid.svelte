@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Episode } from '$lib/types.js';
-  import { appData, cycleEpisodeState, markAllWatched, clearAllWatched } from '$lib/store.svelte.js';
+  import { appData, toggleEpisodeWatched, toggleEpisodeSkipped, markAllWatched, clearAllWatched } from '$lib/store.svelte.js';
 
   interface Props { mediaId: number }
   let { mediaId }: Props = $props();
@@ -46,14 +46,20 @@
     {#each episodes as ep (ep.id)}
       <button
         class={btnClass(ep)}
-        onclick={() => cycleEpisodeState(ep.id)}
-        title="Ep {ep.number}{ep.title ? `: ${ep.title}` : ''}{!ep.aired ? ' [Upcoming]' : ''}{ep.isFiller ? ' [Filler]' : ''}{ep.isRecap ? ' [Recap]' : ''}"
+        onclick={() => toggleEpisodeWatched(ep.id)}
+        oncontextmenu={event => { event.preventDefault(); toggleEpisodeSkipped(ep.id); }}
+        aria-pressed={ep.watched}
+        title="Ep {ep.number}{ep.title ? `: ${ep.title}` : ''}{!ep.aired ? ' [Upcoming]' : ''}{ep.isFiller ? ' [Filler]' : ''}{ep.isRecap ? ' [Recap]' : ''}{ep.skipped ? ' [Skipped]' : ''} · Click to toggle watched, right-click to toggle skipped"
       >{ep.number}</button>
     {/each}
     {#if !episodes.length}
       <p class="text-sm text-zinc-600">No episodes synced.</p>
     {/if}
   </div>
+
+  {#if episodes.length}
+    <p class="text-xs text-zinc-600">Click an episode to mark it watched. Right-click to skip it.</p>
+  {/if}
 
   <!-- Legend -->
   {#if episodes.some(e => e.isFiller || e.isRecap)}

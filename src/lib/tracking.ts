@@ -33,6 +33,8 @@ export async function importTrackingHistory(
       input: connection.tracking.cursor ? { cursor: connection.tracking.cursor } : {},
     });
     let nextId = appData.watchEvents.reduce((maximum, event) => Math.max(maximum, event.id), 0) + 1;
+    const changedEpisodes: number[] = [];
+    const changedEvents: number[] = [];
     for (const record of records) {
       const providerId = record.providerId;
       const remoteEventId = record.remoteEventId;
@@ -75,6 +77,7 @@ export async function importTrackingHistory(
         skipped++;
         continue;
       }
+      changedEvents.push(nextId);
       appData.watchEvents.push({
         id: nextId++,
         mediaId: media.id,
@@ -91,10 +94,11 @@ export async function importTrackingHistory(
       if (episode) {
         episode.watched = true;
         episode.watchedAt = watchedAt(record.watchedAt);
+        changedEpisodes.push(episode.id);
       }
       imported++;
     }
-    if (imported) persist();
+    if (imported) persist({ episodes: changedEpisodes, watchEvents: changedEvents });
     await recordTrackingAudit(connection.id, {
       at: now(),
       direction: "import",
