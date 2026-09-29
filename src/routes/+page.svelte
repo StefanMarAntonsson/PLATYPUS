@@ -1,4 +1,5 @@
 <script module lang="ts">
+  import type { LibraryFilter } from '$lib/types.js';
   type SidebarTab = 'episodes' | 'sync';
   type SyncItemState = 'queued' | 'syncing' | 'synced' | 'unchanged' | 'failed' | 'skipped' | 'cancelled';
   interface SyncLogItem {
@@ -15,12 +16,14 @@
   }
   // Where the list was scrolled, which filter was active, and which sidebar
   // was open, so coming back from a details page returns to the same place.
+  // `startupFilterApplied` makes the startup filter setting apply once per launch.
   let savedViewState: {
     scrollTop: number;
     expandedId: number | null;
-    filter: 'WATCHING' | 'AIRING' | 'PLANNED' | 'CATCH_UP' | null;
+    filter: LibraryFilter | null;
     tab: SidebarTab;
-  } = { scrollTop: 0, expandedId: null, filter: null, tab: 'episodes' };
+    startupFilterApplied: boolean;
+  } = { scrollTop: 0, expandedId: null, filter: null, tab: 'episodes', startupFilterApplied: false };
   let savedSyncRun: SyncRun | null = null;
 </script>
 
@@ -48,8 +51,6 @@
     void openExternalUrl(url, appData.settings.externalBrowser);
   }
 
-  type LibraryFilter = 'WATCHING' | 'AIRING' | 'PLANNED' | 'CATCH_UP';
-
   const FILTER_LABELS: Record<LibraryFilter, string> = {
     WATCHING: 'Watching', AIRING: 'Airing', PLANNED: 'Planned', CATCH_UP: 'Catch Up',
   };
@@ -57,6 +58,16 @@
 
   // No filter selected shows every title in the library.
   let activeFilter = $state<LibraryFilter | null>(untrack(() => savedViewState.filter));
+
+  // Settings load asynchronously, so pick the startup filter once they are ready.
+  $effect(() => {
+    if (fs.status !== 'ready' || savedViewState.startupFilterApplied) return;
+    savedViewState.startupFilterApplied = true;
+    untrack(() => {
+      const { libraryStartupFilter: startup, libraryLastFilter: last } = appData.settings;
+      activeFilter = startup === 'ALL' ? null : startup === 'LAST' ? last : startup;
+    });
+  });
   let catchUpSort = $state<CatchUpSort>('backlog');
   const layout = $derived<LibraryLayout>(appData.settings.libraryLayout ?? 'grid');
   const sortBy = $derived<LibrarySort>(appData.settings.librarySort ?? 'title');
@@ -385,6 +396,8 @@
   // Clicking the active filter clears it and shows everything.
   function toggleFilter(f: LibraryFilter) {
     activeFilter = activeFilter === f ? null : f;
+    savedViewState.startupFilterApplied = true;
+    updateSettings({ libraryLastFilter: activeFilter });
   }
 
   let detailsPanel = $state<HTMLElement | null>(null);

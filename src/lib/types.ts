@@ -13,6 +13,9 @@ export type LibraryStatus =
 export type TitleLanguage = "english" | "romaji" | "native";
 export type CardSize = "small" | "medium" | "large";
 export type LibraryLayout = "grid" | "list";
+export type LibraryFilter = "WATCHING" | "AIRING" | "PLANNED" | "CATCH_UP";
+/** The library filter selected on launch: a fixed filter, all titles, or whatever was last used. */
+export type LibraryStartupFilter = LibraryFilter | "ALL" | "LAST";
 export type LibrarySort =
   | "title"
   | "airing_day"
@@ -206,6 +209,8 @@ export interface Settings {
   libraryLayout: LibraryLayout;
   librarySort: LibrarySort;
   librarySortDescending: boolean;
+  libraryStartupFilter: LibraryStartupFilter;
+  libraryLastFilter: LibraryFilter | null;
   searchAnimeOnly: boolean;
   lastSyncedAt: number | null;
 }
