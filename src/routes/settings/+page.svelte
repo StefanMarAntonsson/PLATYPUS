@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { TitleLanguage, ExternalBrowser } from '$lib/types.js';
+  import type { TitleLanguage, ExternalBrowser, LibraryStartupFilter } from '$lib/types.js';
   import { appData, fs, updateSettings, previewV2Import, importV2Data } from '$lib/store.svelte.js';
   import type { V2MigrationPreview } from '$lib/v2-migration.js';
   import { saveDesktopBackup } from '$lib/repositories.js';
@@ -73,6 +73,15 @@
   }
 
   const s = $derived(appData.settings);
+
+  const STARTUP_FILTERS: { value: LibraryStartupFilter; label: string }[] = [
+    { value: 'ALL', label: 'All titles' },
+    { value: 'WATCHING', label: 'Watching' },
+    { value: 'AIRING', label: 'Airing' },
+    { value: 'PLANNED', label: 'Planned' },
+    { value: 'CATCH_UP', label: 'Catch Up' },
+    { value: 'LAST', label: 'Last used' },
+  ];
 </script>
 
 <div class="flex h-full min-h-0 flex-col">
@@ -193,6 +202,29 @@
                       : 'text-zinc-500 hover:bg-zinc-800/70 hover:text-zinc-300'}"
                   onclick={() => updateSettings({ titleLanguage: lang })}
                 >{lang.charAt(0).toUpperCase() + lang.slice(1)}</button>
+              {/each}
+            </div>
+          </div>
+        </section>
+      {/if}
+
+      {#if activeSection === 'general'}
+        <section class="overflow-hidden rounded-md border border-border bg-surface-2/30">
+          <div class="border-b border-border px-4 py-3">
+            <h2 class="text-sm font-semibold text-zinc-200">Startup filter</h2>
+            <p class="mt-0.5 text-xs text-zinc-500">Choose which library filter is selected when PLATYPUS opens.</p>
+          </div>
+          <div class="px-4 py-3">
+            <div class="inline-flex flex-wrap items-center rounded-lg bg-zinc-900/90 p-1 shadow-inner shadow-black/40" role="group" aria-label="Startup filter">
+              {#each STARTUP_FILTERS as option}
+                <button
+                  aria-pressed={s.libraryStartupFilter === option.value}
+                  class="rounded-md px-3 py-1.5 text-sm font-medium transition-all
+                    {s.libraryStartupFilter === option.value
+                      ? 'bg-accent text-white shadow-sm shadow-black/40'
+                      : 'text-zinc-500 hover:bg-zinc-800/70 hover:text-zinc-300'}"
+                  onclick={() => updateSettings({ libraryStartupFilter: option.value })}
+                >{option.label}</button>
               {/each}
             </div>
           </div>

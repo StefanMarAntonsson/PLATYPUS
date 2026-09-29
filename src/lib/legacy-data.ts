@@ -18,6 +18,8 @@ export const DEFAULT_SETTINGS: Settings = {
   libraryLayout: "grid",
   librarySort: "title",
   librarySortDescending: false,
+  libraryStartupFilter: "ALL",
+  libraryLastFilter: null,
   searchAnimeOnly: true,
   lastSyncedAt: null,
 };
