@@ -32,10 +32,13 @@
     episode.mediaId === mediaId && episode.aired && episode.airingAt !== null
       ? Math.max(latest ?? -Infinity, episode.airingAt)
       : latest, null));
-  const displayStatus = $derived(media?.status === 'RELEASING'
-    && airingState(media.status, lastAiredAt, clock.now, media.nextAiringAt) === null
-    ? 'No recent airing'
-    : media ? statusLabel(media.status) : '');
+  const displayStatus = $derived.by(() => {
+    if (!media) return '';
+    if (media.status !== 'RELEASING') return statusLabel(media.status);
+    const state = airingState(media.status, lastAiredAt, clock.now, media.nextAiringAt);
+    if (state === 'returning') return 'Between seasons';
+    return state === null ? 'No recent airing' : statusLabel(media.status);
+  });
   const sourceLabel = $derived(isManual ? 'Local library' : (media?.providerLinks?.[0]?.connectionName ?? 'Synced library'));
   const lang = $derived(appData.settings.titleLanguage);
   const streamingLinks = $derived((media?.externalLinks ?? []).filter(link => link.type === 'STREAMING').slice(0, 4));

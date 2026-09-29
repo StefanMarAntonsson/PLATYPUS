@@ -4,6 +4,8 @@ import {
   catchUpDetails,
   isWatchingAndAiring,
   RECENTLY_FINISHED_MS,
+  RETURNING_SOON_MS,
+  SEASON_BREAK_GAP_MS,
   selectCatchUpItems,
   sortItems,
   weekdayFromToday,
@@ -80,6 +82,30 @@ describe("library view selection", () => {
     expect(airingState("NOT_YET_RELEASED", now, now)).toBeNull();
   });
 
+  test("labels a long gap before the next episode as a season break", () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    // One Piece: season finale Sep 27, next season starts Jan 3.
+    const finale = Date.UTC(2026, 8, 27);
+    const premiere = Date.UTC(2027, 0, 3);
+    expect(airingState("RELEASING", finale, finale + DAY, premiere)).toBe("returning");
+    expect(airingState("RELEASING", finale, premiere - RETURNING_SOON_MS - 1, premiere)).toBe(
+      "returning",
+    );
+    // Back to airing in the last week before the return.
+    expect(airingState("RELEASING", finale, premiere - RETURNING_SOON_MS, premiere)).toBe("airing");
+    // Skipping a week or two is not a season break.
+    const now = Date.UTC(2026, 8, 22);
+    expect(airingState("RELEASING", now - 6 * DAY, now, now + 8 * DAY)).toBe("airing");
+    expect(airingState("RELEASING", now - 6 * DAY, now, now - 6 * DAY + SEASON_BREAK_GAP_MS)).toBe(
+      "airing",
+    );
+    expect(
+      airingState("RELEASING", now - 6 * DAY, now, now - 6 * DAY + SEASON_BREAK_GAP_MS + 1),
+    ).toBe("returning");
+    // Without episode dates, a far-off next episode still reads as a break.
+    expect(airingState("RELEASING", null, now, now + 60 * DAY)).toBe("returning");
+  });
+
   test("filters active titles by the Airing column, including recent finales", () => {
     const now = Date.UTC(2026, 8, 22);
     const releasing = { status: "RELEASING" as const, nextAiringAt: now + 7 * 24 * 60 * 60 * 1000 };
@@ -92,6 +118,13 @@ describe("library view selection", () => {
       false,
     );
     expect(isWatchingAndAiring({ status: "PLAN_TO_WATCH" }, releasing, null, now)).toBe(false);
+    const betweenSeasons = {
+      status: "RELEASING" as const,
+      nextAiringAt: now + 90 * 24 * 60 * 60 * 1000,
+    };
+    expect(
+      isWatchingAndAiring({ status: "WATCHING" }, betweenSeasons, now - 24 * 60 * 60 * 1000, now),
+    ).toBe(false);
   });
 
   test("sorts in both directions, keeps missing values last, and breaks ties by title", () => {

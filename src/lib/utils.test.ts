@@ -2,6 +2,7 @@ import { expect, test, vi, beforeEach, afterEach } from "vite-plus/test";
 import type { Media } from "./types.js";
 import {
   formatCountdown,
+  formatReturnDate,
   isManualMedia,
   isOnBreak,
   streamingIconUrl,
@@ -79,4 +80,10 @@ test("relative time helpers use an explicit clock when given one", () => {
   expect(timeAgo(start, start + 5 * 60_000)).toBe("5m ago");
   expect(formatCountdown(start + 10 * DAY, start + 9 * DAY)).toBe("in 1d");
   expect(isOnBreak(start + 8 * DAY, start + 2 * DAY)).toBe(false);
+});
+
+test("formatReturnDate adds the year only for far-off dates", () => {
+  const now = new Date(2026, 8, 29).getTime();
+  expect(formatReturnDate(new Date(2027, 0, 3).getTime(), now)).toBe("Returns Jan 3");
+  expect(formatReturnDate(new Date(2027, 9, 3).getTime(), now)).toBe("Returns Oct 3, 2027");
 });

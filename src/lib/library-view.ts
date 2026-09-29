@@ -62,13 +62,20 @@ export function selectCatchUpItems<
 export const RECENTLY_FINISHED_MS = 7 * 24 * 60 * 60 * 1000;
 /** Allow for a skipped week before treating a scheduled series as inactive. */
 export const RECENTLY_AIRING_MS = 14 * 24 * 60 * 60 * 1000;
+/** A gap between episodes longer than this is a season break, not a skipped week. */
+export const SEASON_BREAK_GAP_MS = 21 * 24 * 60 * 60 * 1000;
+/** A show on a season break counts as airing again this close to its return. */
+export const RETURNING_SOON_MS = 7 * 24 * 60 * 60 * 1000;
 
-export type AiringState = "airing" | "finished" | null;
+export type AiringState = "airing" | "returning" | "finished" | null;
 
 /**
  * A provider may leave a show marked "running" long after its last episode.
  * When episode dates exist, use them to avoid a stale Airing badge. Keep the
  * provider status as a fallback for sources without episode dates.
+ *
+ * A seasonal show whose next episode is scheduled after a long gap is
+ * "returning" rather than airing, until its return date is close.
  */
 export function airingState(
   status: Media["status"],
@@ -77,7 +84,12 @@ export function airingState(
   nextAiringAt: number | null = null,
 ): AiringState {
   if (status === "RELEASING") {
-    if (nextAiringAt !== null && nextAiringAt > now) return "airing";
+    if (nextAiringAt !== null && nextAiringAt > now) {
+      const onBreak =
+        nextAiringAt - now > RETURNING_SOON_MS &&
+        nextAiringAt - (lastAiredAt ?? now) > SEASON_BREAK_GAP_MS;
+      return onBreak ? "returning" : "airing";
+    }
     if (lastAiredAt === null) return "airing";
     return now - lastAiredAt <= RECENTLY_AIRING_MS ? "airing" : null;
   }
@@ -87,17 +99,19 @@ export function airingState(
   return null;
 }
 
-/** The Airing filter is a subset of Watching and follows the column label. */
+/**
+ * The Airing filter is a subset of Watching and follows the column label.
+ * Shows on a season break are left out until they return.
+ */
 export function isWatchingAndAiring(
   entry: Pick<LibraryEntry, "status">,
   media: Pick<Media, "status" | "nextAiringAt">,
   lastAiredAt: number | null,
   now: number,
 ): boolean {
-  return (
-    (entry.status === "WATCHING" || entry.status === "REWATCHING") &&
-    airingState(media.status, lastAiredAt, now, media.nextAiringAt) !== null
-  );
+  if (entry.status !== "WATCHING" && entry.status !== "REWATCHING") return false;
+  const state = airingState(media.status, lastAiredAt, now, media.nextAiringAt);
+  return state === "airing" || state === "finished";
 }
 
 /**
