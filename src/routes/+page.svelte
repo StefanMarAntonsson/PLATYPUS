@@ -29,7 +29,7 @@
   import { base } from '$app/paths';
   import type { Media, LibraryEntry, Episode, LibraryLayout, LibrarySort } from '$lib/types.js';
   import { appData, fs, mediaWatchEvents, removeFromLibrary, setMovieWatched, updateLibraryEntry, updateSettings } from '$lib/store.svelte.js';
-  import { getTitle, progressPercent, streamingIconUrl, formatAirDate, formatCountdown, timeAgo, isTypingTarget } from '$lib/utils.js';
+  import { getTitle, progressPercent, streamingIconUrl, formatAirDate, formatCountdown, formatReturnDate, timeAgo, isTypingTarget } from '$lib/utils.js';
   import { notify } from '$lib/notifications.svelte.js';
   import { canSyncMedia, syncMedia, syncAiringLibrary, type SyncItemEvent, type SyncResult } from '$lib/api/sync.js';
   import EpisodeTable from '$lib/components/EpisodeTable.svelte';
@@ -253,9 +253,11 @@
     }
   }
 
-  /** Weekday (0 = Sunday) a releasing show's next episode airs on, if known. */
+  /** Weekday (0 = Sunday) a releasing show's next episode airs on, if known and not on a season break. */
   function airingWeekday(media: Media): number | null {
-    return media.status === 'RELEASING' && media.nextAiringAt != null ? new Date(media.nextAiringAt).getDay() : null;
+    if (media.status !== 'RELEASING' || media.nextAiringAt == null) return null;
+    if (airingState(media.status, mediaStats.get(media.id)?.lastAiredAt ?? null, clock.now, media.nextAiringAt) === 'returning') return null;
+    return new Date(media.nextAiringAt).getDay();
   }
 
   function setSort(sort: LibrarySort) {
@@ -583,7 +585,7 @@
                   : 'text-zinc-500 hover:bg-zinc-800/70 hover:text-zinc-300'}"
               aria-pressed={activeFilter === f}
               disabled={searching}
-              title={activeFilter === f ? 'Show all titles' : f === 'AIRING' ? 'Watching titles labeled Airing or Finished' : undefined}
+              title={activeFilter === f ? 'Show all titles' : f === 'AIRING' ? 'Watching titles labeled Airing or Finished (not those between seasons)' : undefined}
               onclick={() => toggleFilter(f)}
             >
               {FILTER_LABELS[f]}
@@ -701,7 +703,7 @@
         {@const { watched, total, percent } = itemProgress(media, entry)}
         {@const airing = airingState(media.status, mediaStats.get(media.id)?.lastAiredAt ?? null, clock.now, media.nextAiringAt)}
         {@const unwatched = catchUpEpisodeDetails.get(media.id)?.count ?? 0}
-        {@const airsToday = media.status === 'RELEASING'
+        {@const airsToday = airing === 'airing'
           && entry.status !== 'COMPLETED'
           && media.nextAiringAt != null
           && new Date(media.nextAiringAt).getDay() === todayIndex}
@@ -712,9 +714,11 @@
           ? 'DONE'
           : airing === 'airing'
             ? 'AIRING'
-            : entry.status === 'PLAN_TO_WATCH'
-              ? 'PLANNED'
-              : entry.status}
+            : airing === 'returning'
+              ? 'RETURNING'
+              : entry.status === 'PLAN_TO_WATCH'
+                ? 'PLANNED'
+                : entry.status}
         <div
           class="group relative flex cursor-pointer flex-col overflow-hidden rounded-md border bg-surface-2/55 transition-colors
             {airsToday
@@ -743,10 +747,11 @@
               <span class="absolute left-1.5 top-1.5 rounded px-1.5 py-0.5 text-[9px] font-bold tracking-wide
                 {badge === 'DONE' ? 'bg-green-700/90 text-green-50' :
                  badge === 'AIRING' ? 'bg-red-700/90 text-red-50' :
+                 badge === 'RETURNING' ? 'bg-yellow-700/90 text-yellow-50' :
                  badge === 'PLANNED' ? 'bg-zinc-600/90 text-zinc-100' :
                  badge === 'PAUSED' ? 'bg-amber-700/90 text-amber-50' :
                  badge === 'DROPPED' ? 'bg-red-800/90 text-red-100' :
-                 'bg-accent/90 text-white'}">{badge === 'AIRING' ? `• ${badge}` : badge === 'DONE' ? `✓ ${badge}` : badge}</span>
+                 'bg-accent/90 text-white'}">{badge === 'AIRING' ? `• ${badge}` : badge === 'DONE' ? `✓ ${badge}` : badge === 'RETURNING' ? formatReturnDate(media.nextAiringAt as number, clock.now).toUpperCase() : badge}</span>
             {/if}
             {#if streamingUrl}
               <div class="pointer-events-none absolute inset-0 z-20 flex flex-col opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
@@ -850,8 +855,8 @@
               {/if}
             </span>
           {/if}
-          <span role="cell" class="text-[10px] font-semibold uppercase tracking-wide {airing === 'airing' ? 'text-red-400' : 'text-zinc-400'}">
-            {airing === 'airing' ? '• Airing' : airing === 'finished' ? 'Finished' : ''}
+          <span role="cell" class="text-[10px] font-semibold uppercase tracking-wide {airing === 'airing' ? 'text-red-400' : airing === 'returning' ? 'text-yellow-400' : 'text-zinc-400'}">
+            {airing === 'airing' ? '• Airing' : airing === 'returning' ? formatReturnDate(media.nextAiringAt as number, clock.now) : airing === 'finished' ? 'Finished' : ''}
           </span>
           <span role="cell" class="{weekday === todayIndex ? 'font-medium text-accent' : 'text-zinc-400'}">
             {weekday === null ? '' : WEEKDAY_LABELS[weekday]}

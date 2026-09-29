@@ -73,6 +73,18 @@ export function formatAirDate(ts: number | null): string {
   });
 }
 
+// Short return date for a show on a season break, e.g. "Returns Jan 3".
+// The year is added only when the date is far enough out to be ambiguous.
+export function formatReturnDate(ts: number, now = Date.now()): string {
+  const farOut = ts - now > 300 * 86_400_000;
+  const date = new Date(ts).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    ...(farOut ? { year: "numeric" } : {}),
+  });
+  return `Returns ${date}`;
+}
+
 export function airWeekday(ts: number | null): string {
   if (!ts) return "";
   return new Date(ts).toLocaleDateString("en-US", { weekday: "long" });
